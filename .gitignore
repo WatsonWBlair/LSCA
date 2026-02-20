@@ -41,6 +41,7 @@ build/
 *.safetensors
 *.h5
 datasets/
+wrangled/
 logs/
 runs/
 wandb/

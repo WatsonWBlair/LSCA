@@ -31,3 +31,33 @@ def lint(c):
 def freeze(c):
     """Freeze current dependencies to requirements.txt."""
     c.run("pip freeze > requirements.txt")
+
+
+@task
+def wrangle(c, style=None, split=None, no_crop=False):
+    """Run the Seamless Interaction data wrangling pipeline.
+
+    Usage:
+        invoke wrangle                      # wrangle all available data
+        invoke wrangle --style improvised   # only improvised sessions
+        invoke wrangle --split dev          # only the dev split
+        invoke wrangle --no-crop            # skip video cropping
+    """
+    raise NotImplementedError("Wrangling pipeline not yet implemented")
+
+
+@task(name="wrangle-download")
+def wrangle_download(c, style="improvised", split="dev", batch=None, archive=None):
+    """Download and extract Seamless Interaction dataset archives from HuggingFace.
+
+    Usage:
+        invoke wrangle-download --batch 0001 --archive 0004
+        invoke wrangle-download --style naturalistic --split train
+    """
+    raise NotImplementedError("Download pipeline not yet implemented")
+
+
+@task(name="wrangle-manifest")
+def wrangle_manifest(c):
+    """Regenerate the master JSON manifest from already-wrangled data."""
+    raise NotImplementedError("Manifest generation not yet implemented")
