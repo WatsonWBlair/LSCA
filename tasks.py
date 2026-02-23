@@ -5,7 +5,7 @@ from pathlib import Path
 
 from invoke import task
 
-from src.data_wrangling.crop import process_interaction
+from src.data_wrangling.seamless_interaction.crop import process_interaction
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
@@ -45,21 +45,21 @@ def freeze(c):
     c.run("conda env export --from-history > environment.yml")
 
 
-@task
-def download(c, count=1):
+@task(name="download-seamless")
+def download_seamless(c, count=1):
     """Download Seamless Interaction pairs from S3.
 
     Args:
-        num_pairs: Number of interaction pairs to download (default: 1)
+        count: Number of interaction pairs to download (default: 1)
     """
-    from src.data_wrangling.download import download_interaction
+    from src.data_wrangling.seamless_interaction.download import download_interaction
 
     print(f"Downloading {count} interaction pair(s)...")
     download_interaction("improvised", "dev", num_pairs=int(count))
 
 
-@task
-def crop(c):
+@task(name="crop-seamless")
+def crop_seamless(c):
     """Crop all downloaded videos and copy companion files."""
     source_dir = Path('datasets/seamless_interaction')
     output_dir = Path('datasets/wrangled')
@@ -96,8 +96,8 @@ def crop(c):
                 shutil.copy2(src, session_dir / f"{short_name}{ext}")
 
 
-@task
-def cleanup(c):
+@task(name="cleanup-seamless")
+def cleanup_seamless(c):
     """Remove all files from the seamless_interaction source directory."""
     source_dir = Path('datasets/seamless_interaction')
 
@@ -117,4 +117,37 @@ def cleanup(c):
             path.rmdir()
 
     print(f"Cleaned up {count} file(s)")
+
+
+@task(name="download-candor")
+def download_candor(c, start=1, count=None, extract=False):
+    """Download CANDOR dataset parts from S3.
+
+    Args:
+        start: Part number to start from (default: 1)
+        count: Number of parts to download (default: all 166)
+        extract: Extract zip files after download (default: False)
+    """
+    from src.data_wrangling.candor.download import download_candor as dl_candor
+
+    urls_file = Path('src/data_wrangling/candor/file_urls.txt')
+    output_dir = Path('datasets/candor')
+
+    start = int(start)
+    count = int(count) if count is not None else None
+
+    print(f"Downloading CANDOR parts starting from {start}...")
+    dl_candor(urls_file, output_dir, start=start, count=count, extract=extract)
+
+
+@task(name="crop-candor")
+def crop_candor(c):
+    """Crop CANDOR videos to webcam-style framing (stub)."""
+    raise NotImplementedError("CANDOR cropping not yet implemented")
+
+
+@task(name="cleanup-candor")
+def cleanup_candor(c):
+    """Remove CANDOR source files after processing (stub)."""
+    raise NotImplementedError("CANDOR cleanup not yet implemented")
 

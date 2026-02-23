@@ -21,9 +21,13 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 | `invoke lint` | Run ruff linter |
 | `invoke clean` | Remove build artifacts, caches, bytecode |
 | `invoke freeze` | Export conda environment to environment.yml |
-| `invoke download --count N` | Download N interaction pairs from S3 |
-| `invoke crop` | Crop videos and copy companion files |
-| `invoke cleanup` | Remove source files after processing |
+| `invoke download-seamless --count N` | Download N Seamless Interaction pairs |
+| `invoke crop-seamless` | Crop videos and copy companion files |
+| `invoke cleanup-seamless` | Remove source files after processing |
+| `invoke download-candor` | Download CANDOR dataset zip files |
+| `invoke download-candor --extract` | Download and extract CANDOR zips |
+| `invoke crop-candor` | Crop CANDOR videos (stub) |
+| `invoke cleanup-candor` | Remove CANDOR source files (stub) |
 
 Run a single test file: `pytest path/to/test_file.py`
 Run a single test: `pytest path/to/test_file.py::test_function_name`
@@ -46,9 +50,12 @@ All wrangled data should resemble raw webcam footage: mid-chest and up, centered
 ## Code Structure
 
 - `src/data_wrangling/` — Video preprocessing pipeline
-  - `crop.py` — Face-centered video cropping using NPZ keypoints
-  - `download.py` — Download interaction pairs from S3
-  - `types.py` — Type definitions (`CropRegion`)
+  - `seamless_interaction/` — Seamless Interaction dataset utilities
+    - `crop.py` — Face-centered video cropping using NPZ keypoints
+    - `download.py` — Download interaction pairs from S3
+    - `types.py` — Type definitions (`CropRegion`)
+  - `candor/` — CANDOR Corpus dataset utilities
+    - `download.py` — Download dataset zips from pre-signed S3 URLs
 - `tests/data_wrangling/` — Pipeline tests
 
 ## Project Status

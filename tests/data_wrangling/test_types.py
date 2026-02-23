@@ -1,6 +1,6 @@
 """Tests for data wrangling type definitions."""
 
-from src.data_wrangling.types import CropRegion
+from src.data_wrangling.seamless_interaction.types import CropRegion
 
 
 class TestCropRegion:

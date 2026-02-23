@@ -22,7 +22,7 @@ import numpy.typing as npt
 
 logger = logging.getLogger(__name__)
 
-from src.data_wrangling.types import CropRegion
+from src.data_wrangling.seamless_interaction.types import CropRegion
 
 
 def get_video_dimensions(video_path: Path) -> tuple[int, int]:

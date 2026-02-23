@@ -58,3 +58,6 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Pre-signed URLs (contain temporary credentials)
+file_urls.txt
