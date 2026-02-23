@@ -1,10 +1,19 @@
+from pathlib import Path
+
 from invoke import task
+
+from src.data_wrangling.crop import (
+    load_keypoints,
+    compute_crop_region,
+    crop_video,
+    get_video_dimensions,
+)
 
 
 @task
 def install(c):
-    """Install dependencies from requirements.txt."""
-    c.run("pip install -r requirements.txt")
+    """Update conda environment from environment.yml."""
+    c.run("conda env update -f environment.yml --prune")
 
 
 @task
@@ -29,35 +38,60 @@ def lint(c):
 
 @task
 def freeze(c):
-    """Freeze current dependencies to requirements.txt."""
-    c.run("pip freeze > requirements.txt")
+    """Export current conda environment to environment.yml."""
+    c.run("conda env export --from-history > environment.yml")
 
 
 @task
-def wrangle(c, style=None, split=None, no_crop=False):
-    """Run the Seamless Interaction data wrangling pipeline.
+def wrangle(c):
+    """Run crop preview on all interaction files in local dataset."""
+    local_dir = Path('datasets/seamless_interaction')
+    output_dir = Path('datasets/wrangled')
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    Usage:
-        invoke wrangle                      # wrangle all available data
-        invoke wrangle --style improvised   # only improvised sessions
-        invoke wrangle --split dev          # only the dev split
-        invoke wrangle --no-crop            # skip video cropping
-    """
-    raise NotImplementedError("Wrangling pipeline not yet implemented")
+    # Discover all .npz files
+    npz_files = sorted(local_dir.rglob("*.npz"))
+    print(f"Found {len(npz_files)} NPZ files")
+
+    for npz_path in npz_files:
+        video_path = npz_path.with_suffix('.mp4')
+
+        if not video_path.exists():
+            print(f"Skipping: {npz_path.stem} (no matching .mp4)")
+            continue
+
+        print(f"Processing: {video_path.name}")
+
+        keypoints, validity = load_keypoints(npz_path)
+        print(f"  Loaded {len(keypoints)} frames, {validity.sum()} valid")
+
+        frame_width, frame_height = get_video_dimensions(video_path)
+        print(f"  Video dimensions: {frame_width}x{frame_height}")
+
+        crop_region = compute_crop_region(keypoints, validity, frame_width, frame_height)
+        print(f"  Crop region: x={crop_region.x}, y={crop_region.y}, "
+              f"w={crop_region.width}, h={crop_region.height}")
+
+        output_path = output_dir / f"{video_path.stem}_cropped.mp4"
+        crop_video(video_path, output_path, crop_region)
+        print(f"  Output: {output_path}")
 
 
 @task(name="wrangle-download")
-def wrangle_download(c, style="improvised", split="dev", batch=None, archive=None):
-    """Download and extract Seamless Interaction dataset archives from HuggingFace.
+def wrangle_download(c, style="improvised", split="dev", num_pairs=1):
+    """Download interaction pairs from HuggingFace.
 
-    Usage:
-        invoke wrangle-download --batch 0001 --archive 0004
-        invoke wrangle-download --style naturalistic --split train
+    Args:
+        style: "naturalistic" or "improvised" (default: improvised)
+        split: "train", "dev", "test", or "private" (default: dev)
+        num_pairs: Number of interaction pairs to download (default: 1)
     """
-    raise NotImplementedError("Download pipeline not yet implemented")
+    from src.data_wrangling.download import download_interaction
+
+    print(f"Downloading {num_pairs} interaction pair(s) from {style}/{split}...")
+    paths = download_interaction(style, split, num_pairs=int(num_pairs))
+    print(f"Downloaded {len(paths)} file(s):")
+    for p in paths:
+        print(f"  {p}")
 
 
-@task(name="wrangle-manifest")
-def wrangle_manifest(c):
-    """Regenerate the master JSON manifest from already-wrangled data."""
-    raise NotImplementedError("Manifest generation not yet implemented")

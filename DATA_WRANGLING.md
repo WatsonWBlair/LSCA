@@ -42,4 +42,4 @@ The idea is that we can stitch the conversation back together programmatically.
 #### CANDOR Corpus
 A collection of 1650 conversations that strangers had over video chat with rich metadata information obtained from pre-conversation and post-conversation surveys.
 
-This dataset is a perfect match for us, but requires submitting an access request. The access has been granted and Were getting 
+This dataset is a good match for video-call-style interactions. Access has been granted but integration is pending.

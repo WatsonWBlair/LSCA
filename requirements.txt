@@ -1,5 +1,0 @@
-invoke
-torch
-numpy
-opencv-python
-pytest

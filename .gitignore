@@ -24,6 +24,7 @@ build/
 # IDE files
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -41,9 +42,11 @@ build/
 *.onnx
 *.safetensors
 *.h5
+*.tflite
 datasets/
 wrangled/
 logs/
+*.log
 runs/
 wandb/
 
