@@ -46,14 +46,14 @@ invoke test
 
 ## 4. Download Dataset
 
-Download interaction pairs from HuggingFace:
+Download interaction pairs from S3:
 
 ```bash
 # Download 1 random interaction pair (2 participants)
-invoke wrangle-download
+invoke download
 
 # Download multiple pairs
-invoke wrangle-download --num-pairs 5
+invoke download --count 5
 ```
 
 Files are saved to `datasets/seamless_interaction/`. Each interaction includes:
@@ -64,20 +64,27 @@ Files are saved to `datasets/seamless_interaction/`. Each interaction includes:
 
 ## 5. Process Videos
 
-Crop all downloaded videos to webcam-style framing:
+Crop videos and copy companion files to the wrangled directory:
 
 ```bash
-invoke wrangle
+invoke crop
 ```
 
-Output cropped videos are written to `datasets/wrangled/`.
+Output is organized by session: `datasets/wrangled/S{session}/I{interaction}_P{participant}.*`
+
+After verifying output, clean up source files:
+
+```bash
+invoke cleanup
+```
 
 ## Common Commands
 
 | Command | Description |
 |---------|-------------|
-| `invoke wrangle-download` | Download interaction pairs |
-| `invoke wrangle` | Crop videos to webcam framing |
+| `invoke download --count N` | Download N interaction pairs from S3 |
+| `invoke crop` | Crop videos and copy companion files |
+| `invoke cleanup` | Remove source files after processing |
 | `invoke test` | Run pytest tests |
 | `invoke lint` | Run ruff linter |
 

@@ -19,7 +19,7 @@ See [QUICKSTART.md](QUICKSTART.md) for setup instructions.
 src/
   data_wrangling/       # Video preprocessing pipeline
     crop.py             # Face-centered video cropping
-    download.py         # Dataset download from HuggingFace
+    download.py         # Dataset download from S3
     types.py            # Shared type definitions
 tests/
   data_wrangling/       # Pipeline tests
@@ -29,8 +29,9 @@ tasks.py                # Invoke task definitions
 ## Common Commands
 
 ```bash
-invoke wrangle-download    # Download interaction pairs from HuggingFace
-invoke wrangle             # Crop downloaded videos to webcam framing
+invoke download --count 5  # Download interaction pairs from S3
+invoke crop                # Crop videos and copy companion files
+invoke cleanup             # Remove source files after processing
 invoke test                # Run tests
 invoke lint                # Run ruff linter
 ```

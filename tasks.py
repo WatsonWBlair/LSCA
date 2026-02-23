@@ -1,13 +1,16 @@
+import logging
+import re
+import shutil
 from pathlib import Path
 
 from invoke import task
 
-from src.data_wrangling.crop import (
-    load_keypoints,
-    compute_crop_region,
-    crop_video,
-    get_video_dimensions,
-)
+from src.data_wrangling.crop import process_interaction
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+# Pattern: V{vendor}_S{session}_I{interaction}_P{participant}
+FILENAME_PATTERN = re.compile(r"^V(\d+)_S(\d+)_I(\d+)_P(\w+)$")
 
 
 @task
@@ -43,55 +46,75 @@ def freeze(c):
 
 
 @task
-def wrangle(c):
-    """Run crop preview on all interaction files in local dataset."""
-    local_dir = Path('datasets/seamless_interaction')
-    output_dir = Path('datasets/wrangled')
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Discover all .npz files
-    npz_files = sorted(local_dir.rglob("*.npz"))
-    print(f"Found {len(npz_files)} NPZ files")
-
-    for npz_path in npz_files:
-        video_path = npz_path.with_suffix('.mp4')
-
-        if not video_path.exists():
-            print(f"Skipping: {npz_path.stem} (no matching .mp4)")
-            continue
-
-        print(f"Processing: {video_path.name}")
-
-        keypoints, validity = load_keypoints(npz_path)
-        print(f"  Loaded {len(keypoints)} frames, {validity.sum()} valid")
-
-        frame_width, frame_height = get_video_dimensions(video_path)
-        print(f"  Video dimensions: {frame_width}x{frame_height}")
-
-        crop_region = compute_crop_region(keypoints, validity, frame_width, frame_height)
-        print(f"  Crop region: x={crop_region.x}, y={crop_region.y}, "
-              f"w={crop_region.width}, h={crop_region.height}")
-
-        output_path = output_dir / f"{video_path.stem}_cropped.mp4"
-        crop_video(video_path, output_path, crop_region)
-        print(f"  Output: {output_path}")
-
-
-@task(name="wrangle-download")
-def wrangle_download(c, style="improvised", split="dev", num_pairs=1):
-    """Download interaction pairs from HuggingFace.
+def download(c, count=1):
+    """Download Seamless Interaction pairs from S3.
 
     Args:
-        style: "naturalistic" or "improvised" (default: improvised)
-        split: "train", "dev", "test", or "private" (default: dev)
         num_pairs: Number of interaction pairs to download (default: 1)
     """
     from src.data_wrangling.download import download_interaction
 
-    print(f"Downloading {num_pairs} interaction pair(s) from {style}/{split}...")
-    paths = download_interaction(style, split, num_pairs=int(num_pairs))
-    print(f"Downloaded {len(paths)} file(s):")
-    for p in paths:
-        print(f"  {p}")
+    print(f"Downloading {count} interaction pair(s)...")
+    download_interaction("improvised", "dev", num_pairs=int(count))
 
+
+@task
+def crop(c):
+    """Crop all downloaded videos and copy companion files."""
+    source_dir = Path('datasets/seamless_interaction')
+    output_dir = Path('datasets/wrangled')
+
+    npz_files = sorted(source_dir.rglob("*.npz"))
+    print(f"Found {len(npz_files)} NPZ files")
+
+    for npz_path in npz_files:
+        if not npz_path.with_suffix('.mp4').exists():
+            print(f"Skipping: {npz_path.stem} (no matching .mp4)")
+            continue
+
+        match = FILENAME_PATTERN.match(npz_path.stem)
+        if not match:
+            print(f"Skipping: {npz_path.stem} (doesn't match naming pattern)")
+            continue
+
+        vendor, session, interaction, participant = match.groups()
+        short_name = f"I{interaction}_P{participant}"
+        session_dir = output_dir / f"S{session}"
+
+        # Skip if already processed
+        if (session_dir / f"{short_name}.mp4").exists():
+            print(f"Skipping: {npz_path.stem} (already cropped)")
+            continue
+
+        print(f"Cropping: {npz_path.stem} -> S{session}/{short_name}")
+        process_interaction(npz_path, session_dir, short_name)
+
+        # Copy companion files
+        for ext in ['.wav', '.json', '.npz']:
+            src = npz_path.with_suffix(ext)
+            if src.exists():
+                shutil.copy2(src, session_dir / f"{short_name}{ext}")
+
+
+@task
+def cleanup(c):
+    """Remove all files from the seamless_interaction source directory."""
+    source_dir = Path('datasets/seamless_interaction')
+
+    if not source_dir.exists():
+        print("Source directory doesn't exist")
+        return
+
+    count = 0
+    for path in source_dir.rglob("*"):
+        if path.is_file():
+            path.unlink()
+            count += 1
+
+    # Remove empty directories
+    for path in sorted(source_dir.rglob("*"), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+    print(f"Cleaned up {count} file(s)")
 

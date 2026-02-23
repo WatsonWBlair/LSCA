@@ -21,8 +21,9 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 | `invoke lint` | Run ruff linter |
 | `invoke clean` | Remove build artifacts, caches, bytecode |
 | `invoke freeze` | Export conda environment to environment.yml |
-| `invoke wrangle-download` | Download interaction pairs from HuggingFace |
-| `invoke wrangle` | Crop downloaded videos to webcam-style framing |
+| `invoke download --count N` | Download N interaction pairs from S3 |
+| `invoke crop` | Crop videos and copy companion files |
+| `invoke cleanup` | Remove source files after processing |
 
 Run a single test file: `pytest path/to/test_file.py`
 Run a single test: `pytest path/to/test_file.py::test_function_name`
@@ -46,7 +47,7 @@ All wrangled data should resemble raw webcam footage: mid-chest and up, centered
 
 - `src/data_wrangling/` — Video preprocessing pipeline
   - `crop.py` — Face-centered video cropping using NPZ keypoints
-  - `download.py` — Download interaction pairs from HuggingFace
+  - `download.py` — Download interaction pairs from S3
   - `types.py` — Type definitions (`CropRegion`)
 - `tests/data_wrangling/` — Pipeline tests
 

@@ -31,11 +31,21 @@ However the overall goals of the dataset are highly aligned with our research go
 Paper: [Seamless Interaction: Dyadic Audiovisual Motion Modeling and Large-Scale Dataset](./litrature/DataSets/Seamless%20Interaction-%20Dyadic%20Audiovisual%20Motion%20Modeling%20and%20Large-Scale%20Dataset.pdf)
 
 ###### Wrangling Process
-1) Crop images to show mid-chest and up (frame face as for video call)
-2) Re-Package relevant training data objects into a directory that is labeled in a coherent way. 
-3) Set up a master file that explains how individual segments are stitched together.
+1) Download interaction pairs via `invoke download --count N`
+2) Crop videos to show mid-chest and up via `invoke crop`
+3) Clean up source files via `invoke cleanup`
 
-The idea is that we can stitch the conversation back together programmatically.
+Output structure:
+```
+datasets/wrangled/
+  S{session}/
+    I{interaction}_P{participant}.mp4   # Cropped video (H.264)
+    I{interaction}_P{participant}.wav   # Audio
+    I{interaction}_P{participant}.json  # Transcript + VAD metadata
+    I{interaction}_P{participant}.npz   # Pre-computed keypoints
+```
+
+Participants in the same interaction share the same session and interaction IDs, allowing conversations to be reconstructed programmatically.
 
 
 

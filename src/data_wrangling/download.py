@@ -19,7 +19,7 @@ def download_interaction(
     *,
     local_dir: Path = DEFAULT_LOCAL_DIR,
     num_pairs: int = 1,
-) -> list[Path]:
+) -> None:
     """Download interaction pairs from S3 via seamless_interaction library.
 
     Auto-samples interaction pairs from preferred vendors and downloads
@@ -30,9 +30,6 @@ def download_interaction(
         split: "train", "dev", "test", or "private".
         local_dir: Local directory to save downloaded files.
         num_pairs: Number of interaction pairs to download.
-
-    Returns:
-        List of Paths to downloaded file stems (without extension).
 
     Raises:
         FileNotFoundError: If no interaction pairs are found.
@@ -48,20 +45,11 @@ def download_interaction(
         preferred_vendors_only=True,
     )
 
-    if not pairs or not pairs[0]:
+    if not pairs:
         raise FileNotFoundError("No interaction pairs found")
 
-    file_ids = pairs[0]
-    print(f"Auto-sampled interaction pair: {file_ids}")
+    # Flatten all pairs into a single list of file IDs
+    file_ids = [fid for pair in pairs for fid in pair]
+    print(f"Sampled {len(pairs)} pair(s), {len(file_ids)} file(s)")
 
-    print(f"Downloading to {local_dir}...")
     fs.download_batch_from_s3(file_ids, local_dir=str(local_dir))
-    print(f"Downloaded interaction pair: {file_ids}")
-
-    # Find downloaded files by searching for matching stems
-    result = []
-    for file_id in file_ids:
-        matches = list(local_dir.rglob(f"{file_id}.mp4"))
-        if matches:
-            result.append(matches[0].with_suffix(""))
-    return result

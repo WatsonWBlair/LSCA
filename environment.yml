@@ -9,8 +9,9 @@ dependencies:
   - pytorch
   - torchvision
   - numpy
-  # Video processing (conda-managed FFmpeg)
-  - ffmpeg
+  # Video processing (conda-managed FFmpeg with x264)
+  - conda-forge::ffmpeg
+  - x264
   - opencv
   # Testing/tooling
   - pytest

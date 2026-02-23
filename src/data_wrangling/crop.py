@@ -11,14 +11,16 @@ face detection from scratch.
 
 from __future__ import annotations
 
-from pathlib import Path
-import subprocess
 import json
+import logging
+import subprocess
+from pathlib import Path
 
+import ffmpeg
 import numpy as np
 import numpy.typing as npt
 
-import ffmpeg
+logger = logging.getLogger(__name__)
 
 from src.data_wrangling.types import CropRegion
 
@@ -242,7 +244,7 @@ def crop_video(
                     h=crop_region.height,
                     x=crop_region.x,
                     y=crop_region.y)
-            .output(str(output_path), vcodec='libx264', crf=28)
+            .output(str(output_path), vcodec='libx264', crf=23)
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
@@ -250,3 +252,34 @@ def crop_video(
         raise RuntimeError(f"FFmpeg error: {e.stderr.decode() if e.stderr else 'unknown'}")
 
     return output_path
+
+
+def process_interaction(
+    npz_path: Path,
+    output_dir: Path,
+    short_name: str,
+) -> Path:
+    """Crop a video based on face keypoints.
+
+    Args:
+        npz_path: Path to the .npz keypoints file.
+        output_dir: Directory where output video will be written.
+        short_name: Base name for output file (e.g., "I00001227_P1618").
+
+    Returns:
+        Path to the cropped video file.
+    """
+    video_path = npz_path.with_suffix('.mp4')
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load keypoints and compute crop region
+    keypoints, validity = load_keypoints(npz_path)
+    frame_width, frame_height = get_video_dimensions(video_path)
+    crop_region = compute_crop_region(keypoints, validity, frame_width, frame_height)
+    logger.info(f"Crop: x={crop_region.x}, y={crop_region.y}, w={crop_region.width}, h={crop_region.height}")
+
+    # Crop video
+    video_out = output_dir / f"{short_name}.mp4"
+    crop_video(video_path, video_out, crop_region)
+
+    return video_out
