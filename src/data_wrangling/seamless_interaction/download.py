@@ -6,6 +6,7 @@ Official tools: https://github.com/facebookresearch/seamless-interaction
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 
 from seamless_interaction.fs import DatasetConfig, SeamlessInteractionFS
@@ -53,3 +54,46 @@ def download_interaction(
     print(f"Sampled {len(pairs)} pair(s), {len(file_ids)} file(s)")
 
     fs.download_batch_from_s3(file_ids, local_dir=str(local_dir))
+
+
+def download_pairs_iter(
+    style: str,
+    split: str,
+    *,
+    local_dir: Path = DEFAULT_LOCAL_DIR,
+    num_pairs: int = 1,
+) -> Generator[list[str], None, None]:
+    """Download interaction pairs one at a time, yielding file IDs after each.
+
+    Downloads each pair individually for clean-as-you-go processing.
+    Each pair contains 2 participants with 4 files each (.mp4, .wav, .json, .npz).
+
+    Args:
+        style: "naturalistic" or "improvised".
+        split: "train", "dev", "test", or "private".
+        local_dir: Local directory to save downloaded files.
+        num_pairs: Number of interaction pairs to download.
+
+    Yields:
+        List of file IDs (2 per pair) that were just downloaded.
+    """
+    config = DatasetConfig(label=style, split=split, preferred_vendors_only=True)
+    fs = SeamlessInteractionFS(config=config)
+
+    print(f"Getting {num_pairs} random interaction pair(s)...")
+    pairs = fs.get_interaction_pairs(
+        num_pairs=num_pairs,
+        split=split,
+        label=style,
+        preferred_vendors_only=True,
+    )
+
+    if not pairs:
+        raise FileNotFoundError("No interaction pairs found")
+
+    print(f"Sampled {len(pairs)} pair(s)")
+
+    for i, pair in enumerate(pairs, start=1):
+        print(f"Downloading pair {i}/{len(pairs)} ({len(pair)} files)...")
+        fs.download_batch_from_s3(pair, local_dir=str(local_dir))
+        yield pair

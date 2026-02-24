@@ -1,79 +1,101 @@
-# Data Wrangling Planning and Overview
+# Data Wrangling
 
-This file provides an overview of our selected data sources and the wrangling steps involved with them. 
+This document covers data source selection and preprocessing for the LSCA project.
 
-The goal of all data wrangling tasks is to produce audio and video file pairs that closely resemble the raw video footage that will be captured by a web-cam in model operation. ie: mid-chest and up centered on the speakers face, and cropped to the appropriate aspect ratio.
+**Goal:** Produce audio/video pairs resembling webcam footage—mid-chest up, face-centered, appropriate aspect ratio.
 
-## Sources
-Several sources have been identifed as highly relevant to our use case.
+## Quick Start
 
-#### Seamless_Interaction
-A collection of over 4,000 hours of in-person, face-to-face, interaction footage from more than 4,000 participants in diverse contexts.
+```bash
+invoke wrangle-dev
+```
 
-It is worth noting that in-person interactions differ from those facilitated by Zoom. From the Dataset’s research paper: 
->> …research has found that remote interactions (e.g., audio and video conferencing) often differ substantially from in-person interactions in terms of turn-taking (Tian et al., 2024b),[and] gaze patterns (Horstmann and Linke, 2022)...
+Downloads and processes a small development dataset (3 Seamless Interaction pairs + 1 CANDOR part).
 
-However the overall goals of the dataset are highly aligned with our research goals:
+## Memory-Efficient Processing
 
-* Embodied AI and Virtual Agents
-- Train agents that display natural gestures
-- Model turn-taking dynamics and interaction rhythms
-- Generate contextually appropriate responses to human behavior
-* Multimodal Understanding
-- Analyze cross-modal correlations between speech, gesture, and expressions
-- Extract behavioral patterns from large-scale interaction data
-- Develop models to understand social dynamics
-* Human-Computer Interaction
-- Design interfaces that respond to subtle human cues
-- Improve telepresence technologies with better behavioral modeling
-- Create more natural conversational agents
+All wrangling commands use **clean-as-you-go** processing to minimize disk usage:
 
-Paper: [Seamless Interaction: Dyadic Audiovisual Motion Modeling and Large-Scale Dataset](./litrature/DataSets/Seamless%20Interaction-%20Dyadic%20Audiovisual%20Motion%20Modeling%20and%20Large-Scale%20Dataset.pdf)
+| Dataset | Working Space | Without Clean-as-you-go |
+|---------|---------------|-------------------------|
+| Seamless Interaction | ~200-400MB | N × 200MB (scales with count) |
+| CANDOR | ~5GB per part | 850GB+ (all zips) |
 
-###### Wrangling Process
-1) Download interaction pairs via `invoke download-seamless --count N`
-2) Crop videos to show mid-chest and up via `invoke crop-seamless`
-3) Clean up source files via `invoke cleanup-seamless`
+Each item is fully processed before the next is downloaded, keeping peak disk usage constant regardless of dataset size.
 
-Output structure:
+---
+
+## Seamless Interaction
+
+4,000+ hours of in-person face-to-face interaction footage from 4,000+ participants.
+
+> Note: In-person interactions differ from video calls in turn-taking and gaze patterns ([Tian et al., 2024](./litrature/DataSets/Seamless%20Interaction-%20Dyadic%20Audiovisual%20Motion%20Modeling%20and%20Large-Scale%20Dataset.pdf)), but the dataset's goals align with ours: training agents with natural gestures, modeling turn-taking, and understanding multimodal social dynamics.
+
+### Wrangling
+
+```bash
+invoke wrangle-seamless --count N
+```
+
+Downloads, crops to webcam framing, and cleans up one pair at a time.
+
+**Options:**
+- `--count N` — Number of interaction pairs (default: 1)
+- `--style` — "naturalistic" or "improvised" (default: improvised)
+- `--split` — "train", "dev", or "test" (default: dev)
+
+### Output Structure
+
 ```
 datasets/wrangled/
   S{session}/
     I{interaction}_P{participant}.mp4   # Cropped video (H.264)
-    I{interaction}_P{participant}.wav   # Audio
+    I{interaction}_P{participant}.wav   # Audio (16kHz mono)
     I{interaction}_P{participant}.json  # Transcript + VAD metadata
     I{interaction}_P{participant}.npz   # Pre-computed keypoints
 ```
 
-Participants in the same interaction share the same session and interaction IDs, allowing conversations to be reconstructed programmatically.
+Participants in the same interaction share session and interaction IDs, enabling programmatic conversation reconstruction.
 
+---
 
+## CANDOR Corpus
 
-#### CANDOR Corpus
-A collection of 1650 conversations that strangers had over video chat with rich metadata information obtained from pre-conversation and post-conversation surveys.
+1,650 video chat conversations between strangers with rich pre/post-conversation survey metadata. Already captured via video chat—no cropping needed.
 
-This dataset is a good match for video-call-style interactions since it was captured via video chat.
+### Wrangling
 
-###### Wrangling Process
-1) Download dataset zips via `invoke download-candor`
-2) Extract zips via `invoke download-candor --extract`
-3) Crop videos via `invoke crop-candor` (not yet implemented)
-4) Clean up source files via `invoke cleanup-candor` (not yet implemented)
+```bash
+invoke wrangle-candor
+```
 
-The dataset is distributed as 166 zip files (~5GB each, ~850GB total). Default behavior downloads without extraction for archival/transfer purposes.
+Iteratively processes each part: download zip → extract → extract per-participant audio → cleanup. Supports resume via marker files.
 
-Output structure:
+**Options:**
+- `--start N` — Part number to start from (default: 1)
+- `--count N` — Number of parts to process (default: all 166)
+
+**Dataset size:** 166 zip files (~5GB each, ~850GB total raw). After wrangling: ~280GB.
+
+### Output Structure
+
 ```
 datasets/candor/
-  raw_media_part_001.zip
-  raw_media_part_002.zip
-  ...
-  {conversation-uuid}/           # When extracted
-    raw/
-      {participant-uuid}.mkv     # Video per participant
+  {conversation-uuid}/
     processed/
+      {user-id}.mp4   # Per-participant video (cropped)
+      {user-id}.wav   # Per-participant audio (16kHz mono)
     transcription/
     metadata.json
     survey.csv
     audio_video_features.csv
 ```
+
+Storage: ~170MB per conversation.
+
+### Utility Commands
+
+For debugging or archival workflows:
+- `invoke download-candor` — Download zips without processing
+- `invoke download-candor --extract` — Download and extract zips
+- `invoke extract-candor` — Extract audio from already-extracted MKVs

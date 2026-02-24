@@ -6,6 +6,7 @@ Downloads raw_media_part_XXX.zip files from pre-signed S3 URLs.
 from __future__ import annotations
 
 import logging
+import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -124,3 +125,109 @@ def download_candor(
                 logger.info(f"Skipping extraction of {zip_path.name} (already extracted)")
 
     logger.info("CANDOR download complete")
+
+
+def wrangle_part(url: str, output_dir: Path) -> bool:
+    """Download, extract, process audio, and cleanup for a single part.
+
+    Args:
+        url: Pre-signed S3 URL for the zip file.
+        output_dir: Directory for downloads and extraction.
+
+    Returns:
+        True if processing occurred, False if already complete.
+    """
+    from src.data_wrangling.candor.extract import (
+        cleanup_extras,
+        extract_conversation_audio,
+    )
+
+    zip_path = download_part(url, output_dir)
+    part_name = zip_path.stem  # e.g., 'raw_media_part_001'
+
+    wrangled_marker = output_dir / f"{part_name}_wrangled"
+    if wrangled_marker.exists():
+        logger.info(f"Skipping {part_name} (already wrangled)")
+        return False
+
+    # Extract zip if not already extracted
+    extracted_marker = output_dir / f"{part_name}_extracted"
+    if not extracted_marker.exists():
+        extract_part(zip_path, output_dir)
+        extracted_marker.touch()
+
+    # Process all conversations with raw/ directories
+    for conv_dir in output_dir.iterdir():
+        if not conv_dir.is_dir() or conv_dir.name.startswith('raw_media_part'):
+            continue
+        raw_dir = conv_dir / "raw"
+        if not raw_dir.exists():
+            continue  # Already cleaned
+
+        # Extract audio (with correct user_id naming)
+        extract_conversation_audio(conv_dir)
+
+        # Remove extra files (combined video/audio, thumbnail, etc.)
+        cleanup_extras(conv_dir)
+
+        # Remove raw/ directory
+        shutil.rmtree(raw_dir)
+        logger.info(f"Removed {raw_dir}")
+
+    # Delete zip file to save space
+    if zip_path.exists():
+        zip_path.unlink()
+        logger.info(f"Removed {zip_path.name}")
+
+    # Remove extracted marker since zip is gone
+    if extracted_marker.exists():
+        extracted_marker.unlink()
+
+    wrangled_marker.touch()
+    logger.info(f"Completed {part_name}")
+    return True
+
+
+def wrangle_candor(
+    urls_file: Path,
+    output_dir: Path,
+    start: int = 1,
+    count: int | None = None,
+) -> int:
+    """Iteratively download, process, and cleanup CANDOR parts.
+
+    For each part: downloads zip, extracts, extracts audio, removes raw/.
+    Supports resume via marker files.
+
+    Args:
+        urls_file: Path to file containing pre-signed S3 URLs.
+        output_dir: Directory for downloads and extraction.
+        start: Part number to start from (1-indexed, default: 1).
+        count: Number of parts to process (default: all remaining).
+
+    Returns:
+        Number of parts processed.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    urls = load_urls(urls_file)
+    logger.info(f"Found {len(urls)} URLs in {urls_file.name}")
+
+    # Select range of URLs (1-indexed start)
+    start_idx = start - 1
+    if count is not None:
+        end_idx = start_idx + count
+        urls = urls[start_idx:end_idx]
+    else:
+        urls = urls[start_idx:]
+
+    logger.info(f"Processing parts {start} to {start + len(urls) - 1}")
+
+    processed = 0
+    for i, url in enumerate(urls, start=start):
+        logger.info(f"--- Part {i} of {start + len(urls) - 1} ---")
+        if wrangle_part(url, output_dir):
+            processed += 1
+
+    logger.info(f"Wrangling complete. Processed {processed} part(s).")
+    return processed
