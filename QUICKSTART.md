@@ -21,7 +21,7 @@ conda activate lsca
 
 ## 2. Install seamless_interaction Library
 
-The dataset download requires the `seamless_interaction` library with its asset files:
+The Seamless Interaction dataset requires the `seamless_interaction` library with its asset files:
 
 ```bash
 # Clone the library (if not already present)
@@ -44,47 +44,62 @@ python -c "import torch; import ffmpeg; import seamless_interaction; print('All 
 invoke test
 ```
 
-## 4. Download Dataset
+## 4. Download and Process Data
 
-Download interaction pairs from S3:
+All wrangling commands use memory-efficient processing—each item is fully processed before the next is downloaded.
+
+### Quick Dev Dataset
 
 ```bash
-# Download 1 random interaction pair (2 participants)
-invoke download
-
-# Download multiple pairs
-invoke download --count 5
+invoke wrangle-dev
 ```
 
-Files are saved to `datasets/seamless_interaction/`. Each interaction includes:
-- `.mp4` - Video file
-- `.wav` - Audio file
-- `.json` - Transcript + VAD metadata
-- `.npz` - Pre-computed keypoints
+Downloads and processes 3 Seamless Interaction pairs + 1 CANDOR part (~500MB working space).
 
-## 5. Process Videos
-
-Crop videos and copy companion files to the wrangled directory:
+### Seamless Interaction
 
 ```bash
-invoke crop
+# Process N interaction pairs
+invoke wrangle-seamless --count 5
 ```
 
-Output is organized by session: `datasets/wrangled/S{session}/I{interaction}_P{participant}.*`
+Each pair is downloaded, cropped to webcam framing, and cleaned up before the next.
 
-After verifying output, clean up source files:
+### CANDOR Corpus
 
 ```bash
-invoke cleanup
+# Process all 166 parts (or use --count to limit)
+invoke wrangle-candor --count 5
+```
+
+Requires pre-signed URLs in `src/data_wrangling/candor/file_urls.txt`.
+
+## Output Structure
+
+```
+datasets/wrangled/              # Seamless Interaction output
+  S{session}/
+    I{interaction}_P{participant}.mp4
+    I{interaction}_P{participant}.wav
+    I{interaction}_P{participant}.json
+    I{interaction}_P{participant}.npz
+
+datasets/candor/                # CANDOR output
+  {conversation-uuid}/
+    processed/
+      {user-id}.mp4
+      {user-id}.wav
+    metadata.json
+    ...
 ```
 
 ## Common Commands
 
 | Command | Description |
 |---------|-------------|
-| `invoke download --count N` | Download N interaction pairs from S3 |
-| `invoke crop` | Crop videos and copy companion files |
-| `invoke cleanup` | Remove source files after processing |
+| `invoke wrangle-dev` | Small dev dataset (3 Seamless + 1 CANDOR) |
+| `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
+| `invoke wrangle-candor` | Process CANDOR dataset iteratively |
 | `invoke test` | Run pytest tests |
 | `invoke lint` | Run ruff linter |
 

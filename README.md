@@ -4,36 +4,52 @@ A research project building a real-time multimodal understanding pipeline for na
 
 ## Quick Start
 
-See [QUICKSTART.md](QUICKSTART.md) for setup instructions.
+```bash
+# Setup environment
+conda env create -f environment.yml
+conda activate lsca
+
+# Download a small dev dataset
+invoke wrangle-dev
+```
+
+See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [QUICKSTART.md](QUICKSTART.md) | Environment setup and basic usage |
-| [DATA_WRANGLING.md](DATA_WRANGLING.md) | Dataset processing details |
+| [DATA_WRANGLING.md](DATA_WRANGLING.md) | Dataset sources and processing details |
 
 ## Project Structure
 
 ```
 src/
-  data_wrangling/       # Video preprocessing pipeline
-    crop.py             # Face-centered video cropping
-    download.py         # Dataset download from S3
-    types.py            # Shared type definitions
+  data_wrangling/
+    seamless_interaction/   # Seamless Interaction dataset
+      crop.py               # Face-centered video cropping
+      download.py           # Download from S3
+      types.py              # Type definitions
+    candor/                 # CANDOR Corpus dataset
+      download.py           # Download and wrangling
+      extract.py            # Audio extraction from MKVs
 tests/
-  data_wrangling/       # Pipeline tests
-tasks.py                # Invoke task definitions
+  data_wrangling/           # Pipeline tests
+tasks.py                    # Invoke task definitions
 ```
 
 ## Common Commands
 
 ```bash
-invoke download --count 5  # Download interaction pairs from S3
-invoke crop                # Crop videos and copy companion files
-invoke cleanup             # Remove source files after processing
-invoke test                # Run tests
-invoke lint                # Run ruff linter
+# Data wrangling (memory-efficient, clean-as-you-go)
+invoke wrangle-dev                   # Small dev dataset (3 Seamless + 1 CANDOR)
+invoke wrangle-seamless --count 10   # Process 10 Seamless Interaction pairs
+invoke wrangle-candor                # Process full CANDOR dataset
+
+# Development
+invoke test                          # Run tests
+invoke lint                          # Run ruff linter
 ```
 
 ## Related Work
