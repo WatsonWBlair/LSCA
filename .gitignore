@@ -61,3 +61,66 @@ htmlcov/
 
 # Pre-signed URLs (contain temporary credentials)
 file_urls.txt
+# ============================================================
+# CAMELS Capstone — .gitignore
+# ============================================================
+
+# ----- Virtual Environments -----
+.venv/
+venv/
+env/
+
+# ----- Datasets (download your own — see README) -----
+data/
+
+# ----- Pre-trained Model Weights (auto-downloaded at runtime) -----
+.marlin/
+
+# ----- Training Checkpoints & Outputs -----
+checkpoints/
+checkpoints_test/
+checkpoints_*/
+outputs/
+run_output/
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+*.so
+
+# ----- Linters / Type-checkers / Test Caches -----
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+
+# ----- OS Files -----
+.DS_Store
+Thumbs.db
+
+# ----- IDE / Editor -----
+.vscode/
+.idea/
+
+# ----- Logs -----
+*.log
+
+# ----- Seamless Interaction (Facebook clone — install separately) -----
+seamless_interaction/
+
+# ----- Claude Code local config -----
+.claude/
+
+# ----- Secrets (just in case) -----
+.env
+.env.*
+*.pem
+*.key
