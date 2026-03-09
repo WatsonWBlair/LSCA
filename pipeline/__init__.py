@@ -1,1 +1,0 @@
-# CAMELS pipeline package
