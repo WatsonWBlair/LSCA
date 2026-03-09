@@ -119,6 +119,7 @@ def run_all_pipelines(
         fv = ex.submit(video_pipeline, frames, fps, models["marlin"], adapters["temporal_pool"], cfg)
         fph = ex.submit(
             phoneme_pipeline, audio, models["wav2vec2_ctc"], models["wav2vec2_processor"], cfg,
+            chunk_offset_sec=start_sec,
         )
         fp = ex.submit(prosody_pipeline, audio, cfg, stats=prosody_stats)
         ft = ex.submit(
@@ -150,11 +151,19 @@ def run_all_pipelines(
     append_row(output_dir, cfg.export.zph_file, z_ph, chunk_id)
     append_row(output_dir, cfg.export.zp_file, z_p, chunk_id)
 
-    # Phoneme metadata
+    # Phoneme metadata — full segment info with absolute timestamps
     phoneme_registry.append({
         "chunk_id": chunk_id,
-        "phonemes": [s.get("label", "") for s in segments],
         "count": len(segments),
+        "segments": [
+            {
+                "label": s.get("label", ""),
+                "label_id": s.get("label_id", -1),
+                "start_sec": s.get("start_sec", 0.0),
+                "end_sec": s.get("end_sec", 0.0),
+            }
+            for s in segments
+        ],
     })
     save_phoneme_metadata(output_dir, phoneme_registry, cfg)
 

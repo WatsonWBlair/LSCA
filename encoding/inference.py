@@ -22,6 +22,7 @@ def infer_chunk(
     adapters: dict,
     cfg: CAMELSConfig,
     prosody_stats: dict | None = None,
+    chunk_offset_sec: float = 0.0,
 ) -> dict:
     """
     Single-chunk inference: run all 3 pipelines in parallel, encode via adapters.
@@ -32,11 +33,14 @@ def infer_chunk(
       z_ph_pooled:  (d_latent,)
       z_p:          (d_latent,)
       ph_mask:      (MAX_PHONES,)
-      segments:     list of phoneme dicts
+      segments:     list of phoneme dicts with start_sec/end_sec absolute timestamps
     """
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
         fv = ex.submit(video_pipeline, chunk_frames, fps, models["marlin"], adapters["temporal_pool"], cfg)
-        fph = ex.submit(phoneme_pipeline, audio_chunk, models["wav2vec2_ctc"], models["wav2vec2_processor"], cfg)
+        fph = ex.submit(
+            phoneme_pipeline, audio_chunk, models["wav2vec2_ctc"], models["wav2vec2_processor"], cfg,
+            chunk_offset_sec=chunk_offset_sec,
+        )
         fp = ex.submit(prosody_pipeline, audio_chunk, cfg, stats=prosody_stats)
 
         v_raw = fv.result()

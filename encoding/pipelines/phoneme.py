@@ -19,13 +19,24 @@ logger = logging.getLogger(__name__)
 def _ctc_decode_with_boundaries(
     logits: torch.Tensor,
     processor,
+    chunk_offset_sec: float = 0.0,
+    sample_rate: int = 16000,
 ) -> list[dict]:
     """
-    Greedy CTC decode producing phoneme labels with frame boundaries.
+    Greedy CTC decode producing phoneme labels with frame boundaries and timestamps.
+
+    wav2vec2 downsamples by factor of 320 (hop_length=320 at 16kHz = 20ms per frame).
 
     Returns list of dicts:
-      [{'label': str, 'label_id': int, 'start_frame': int, 'end_frame': int}, ...]
+      [{'label': str, 'label_id': int,
+        'start_frame': int, 'end_frame': int,
+        'start_sec': float, 'end_sec': float}, ...]
+
+    start_sec/end_sec are relative to chunk start. Add chunk_offset_sec to get
+    absolute session time.
     """
+    hop_length = 320  # wav2vec2 conv feature extractor stride
+    frame_dur = hop_length / sample_rate  # seconds per CTC frame
     # Greedy decode: argmax at each frame
     pred_ids = torch.argmax(logits, dim=-1).squeeze(0)  # (T_frames,)
 
@@ -54,9 +65,11 @@ def _ctc_decode_with_boundaries(
             "end_frame": len(pred_ids),
         })
 
-    # Decode label strings
+    # Decode label strings and compute timestamps
     for seg in segments:
         seg["label"] = processor.decode([seg["label_id"]]).strip()
+        seg["start_sec"] = round(chunk_offset_sec + seg["start_frame"] * frame_dur, 4)
+        seg["end_sec"] = round(chunk_offset_sec + seg["end_frame"] * frame_dur, 4)
 
     return segments
 
@@ -66,6 +79,7 @@ def phoneme_pipeline(
     wav2vec2_ctc,
     wav2vec2_processor,
     cfg: CAMELSConfig,
+    chunk_offset_sec: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[dict]]:
     """
     Full phoneme pipeline for one chunk.
@@ -75,12 +89,16 @@ def phoneme_pipeline(
         wav2vec2_ctc: frozen Wav2Vec2ForCTC model
         wav2vec2_processor: Wav2Vec2Processor
         cfg: CAMELSConfig
+        chunk_offset_sec: absolute start time of this chunk in the session (seconds).
+                          Added to per-phoneme timestamps so the maintenance agent
+                          can place phonemes on an absolute timeline.
 
     Returns:
         phone_embs:   (num_phones, d_phoneme) — per-phoneme acoustic embeddings
         phone_labels: (num_phones,)           — phoneme class IDs
         phone_mask:   (num_phones,)           — all ones (before padding)
-        segments:     list of dicts with label, label_id, start_frame, end_frame
+        segments:     list of dicts with label, label_id, start_frame, end_frame,
+                      start_sec, end_sec (absolute session time)
     """
     d_phoneme = cfg.latent.d_phoneme
     device = next(wav2vec2_ctc.parameters()).device
@@ -109,8 +127,12 @@ def phoneme_pipeline(
         logits = outputs.logits                      # (1, T_frames, vocab_size)
         hidden = outputs.hidden_states[-1]           # (1, T_frames, d_phoneme)
 
-    # CTC decode with frame boundaries
-    segments = _ctc_decode_with_boundaries(logits, wav2vec2_processor)
+    # CTC decode with frame boundaries + timestamps
+    segments = _ctc_decode_with_boundaries(
+        logits, wav2vec2_processor,
+        chunk_offset_sec=chunk_offset_sec,
+        sample_rate=cfg.streaming.sample_rate,
+    )
 
     if not segments:
         logger.debug("phoneme_pipeline: no phonemes detected")
