@@ -174,15 +174,6 @@ def wrangle_part(url: str, output_dir: Path) -> bool:
         shutil.rmtree(raw_dir)
         logger.info(f"Removed {raw_dir}")
 
-    # Delete zip file to save space
-    if zip_path.exists():
-        zip_path.unlink()
-        logger.info(f"Removed {zip_path.name}")
-
-    # Remove extracted marker since zip is gone
-    if extracted_marker.exists():
-        extracted_marker.unlink()
-
     wrangled_marker.touch()
     logger.info(f"Completed {part_name}")
     return True
