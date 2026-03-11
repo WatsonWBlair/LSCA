@@ -1,0 +1,278 @@
+\documentclass[12pt, a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{abstract}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\geometry{margin=1in}
+
+% Title info
+\title{\textbf{CAMELS: A Multimodal Understanding Pipeline and Alignment Framework for Real-Time Human--Computer Interaction}}
+\author{[Author Names]}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% -------------------------------------------------------
+\begin{abstract}
+We present CAMELS, a Multimodal Understanding (MU) pipeline and alignment framework designed to enable real-time, naturalistic, Human--Computer Interaction (HCI). Traditional Automatic Speech Recognition (ASR) pipelines rely on converting audio features into textual transcripts as the primary intermediate representation of user utterances. Although this allows text-based LLMs to process user utterances, it introduces a number of critical flaws. First, it discards critical non-textual semantic cues such as tone, speech patterns, and contextual behavioural signals. Secondly, these pipelines rely on components that are not designed to handle streaming interactions. Our approach addresses these limitations by using multi-modal encoding to preserve semantic information as well as a novel temporal chunking strategy to enable real-time comprehension of user interactions.
+
+CAMELS improves training efficiency by leveraging Parameter Efficient Fine Tuning (PEFT) strategies to project multimodal embeddings onto a shared latent space. It further enables online processing of user utterances via temporal chunking and Agentic AI, a stateful agent that tracks and updates conversational context within Latent Representational Space (LRS). CAMELS models conversations in real-time as Hypergraph Neural Networks (HGNNs) that capture higher-order dependencies across speakers, modalities, and temporal segments. These HGNN representations are then used by multi-agent systems to generate naturalistic, context-aware responses across evolving multimodal interactions. We hypothesise that operating directly in LRS will reduce computational overhead sufficiently to enable real-time simulation-based learning exercises. By unifying multimodal signals in a shared latent space, CAMELS provides a practical framework for low-latency, context-aware conversational AI, with planned evaluations targeting multimodal dialogue understanding benchmarks.
+
+\textbf{Keywords:} Conversational AI, Multimodal Understanding, Large Concept Model, Latent Space, Coordinated Learning, Latent Embedding, Automatic Speech Recognition
+\end{abstract}
+
+% -------------------------------------------------------
+\section{Introduction}
+
+Multimodal Understanding pipeline designed to facilitate simulated telepresence conversations for interpersonal skills training.
+
+\subsection*{Multimodal Understanding}
+
+% TODO: Introduce the core concepts of Multimodal Understanding.
+
+Multimodal understanding is the capability to simultaneously process and reason across multiple data types and sources at once.
+
+% TODO: What is the problem we are solving? What is the impact of solving it?
+
+The CAMELS alignment framework efficiently adapts existing backbone models to latent space. Reducing the computational and complexity cost of aligning to latent modalities enables further research into the field. We show the effectiveness of the framework and latent modality by building a system for multimodal understanding.
+
+% TODO: How do we propose to solve the problem?
+% TODO: Who is impacted by this problem being solved? How are they impacted?
+% TODO: Is there previous work done on the problem?
+% TODO: How does our work differ from earlier research?
+% TODO: How will we quantify the impact of our solution and system design in comparison to previous work?
+
+Our contributions are summarised as follows:
+\begin{enumerate}
+    \item [Contribution 1 -- TBD]
+    \item [Contribution 2 -- TBD]
+\end{enumerate}
+
+The rest of the paper is organised as follows. Section~\ref{sec:foundations} introduces Foundational Concepts and Related Works. Section~\ref{sec:methodology} provides an overview of our methodology, benchmarks, and datasets. Section~\ref{sec:experiments} reviews our experimental results. Finally, we draw conclusions and outline further work in Section~\ref{sec:conclusions}.
+
+% -------------------------------------------------------
+\section{Foundational Concepts}
+\label{sec:foundations}
+
+For a full literature review of surveyed papers, see Appendix~\ref{app:litreview}.
+
+% TODO: What background knowledge do you need to be able to understand the project?
+
+\subsection{Representation Learning}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsection{Learning Strategies}
+% TODO: Provide a 1-paragraph overview of the general topic.
+
+\subsubsection{Contrastive Learning}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsubsection{Generative Adversarial Networks}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsubsection{Reinforcement Learning}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsection{Adapter PEFT}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsection{Shared Representation Space}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+\subsection{Hypergraph Neural Networks}
+% TODO: Provide a three-sentence overview of the topic.
+% TODO: How does this topic impact our project?
+% TODO: Is there a particular work related to this topic that impacts our project?
+
+% -------------------------------------------------------
+\section{Methodology}
+\label{sec:methodology}
+
+% TODO: What is the problem we are going to be solving?
+% TODO: What is the system architecture we are using? (show figure)
+% TODO: What are the main components of our solution?
+
+\subsection{Encoder Swarm}
+
+% TODO: What is this component's architecture? (show figure)
+% TODO: What is this component's expected input?
+% TODO: How will this component compute its output? (provide algorithm pseudo-code or mathematical formulation)
+% TODO: How will this component be trained?
+% TODO: How will we determine how successful the component is?
+% TODO: What aspects of this component will we perform ablations on?
+
+\subsection{Maintenance Agent}
+
+% TODO: What is this component's architecture? (show figure)
+% TODO: What is this component's expected input?
+% TODO: How will this component compute its output? (provide algorithm pseudo-code or mathematical formulation)
+% TODO: How will this component be trained?
+% TODO: How will we determine how successful the component is?
+% TODO: What aspects of this component will we perform ablations on?
+
+\subsection{Latent Space Agents}
+
+% TODO: What is this component's architecture? (show figure)
+% TODO: What is this component's expected input?
+% TODO: How will this component compute its output? (provide algorithm pseudo-code or mathematical formulation)
+% TODO: How will this component be trained?
+% TODO: How will we determine how successful the component is?
+% TODO: What aspects of this component will we perform ablations on?
+
+% TODO: How will we evaluate overall system performance?
+% TODO: What benchmarks fit our core use case best?
+
+\subsection{Datasets}
+
+% TODO: What kinds of data support system performance and evaluation?
+
+\subsubsection{Candor}
+
+% TODO: Write a paragraph that explains the dataset and why it's a relevant fit.
+% TODO: How did we acquire the dataset?
+% TODO: What data-wrangling steps were done on the dataset?
+% TODO: What labels/features did we extract from the dataset?
+
+\subsubsection{Seamless Interaction}
+
+% TODO: Write a paragraph that explains the dataset and why it's a relevant fit.
+% TODO: How did we acquire the dataset?
+% TODO: What data-wrangling steps were done on the dataset?
+% TODO: What labels/features did we extract from the dataset?
+
+\subsubsection{VT-SSum}
+
+% TODO: Write a paragraph that explains the dataset and why it's a relevant fit.
+% TODO: How did we acquire the dataset?
+% TODO: What data-wrangling steps were done on the dataset?
+% TODO: What labels/features did we extract from the dataset?
+
+% -------------------------------------------------------
+\section{Experiments and Results}
+\label{sec:experiments}
+
+% TODO: Provide a one-paragraph introduction to the experiments conducted and benchmarks measured against.
+
+\subsection{Ablations}
+
+% TODO: What ablative studies were conducted? What were the impacts?
+\begin{itemize}
+    \item Dimensions of Latent Space
+    \item Chunk sizing
+    \item etc.
+\end{itemize}
+
+\subsection{Benchmarks}
+
+% TODO: What benchmarks did we evaluate against?
+% TODO: How did we do?
+
+% -------------------------------------------------------
+\section{Conclusions}
+\label{sec:conclusions}
+
+% TODO: What are the conclusions we can draw from our results?
+% TODO: What further research is indicated by our results?
+
+% -------------------------------------------------------
+\section{Future Work}
+
+% TODO: What topics require further investigation?
+% TODO: What are our known-unknowns?
+% TODO: What topics deserve more detailed attention?
+
+% -------------------------------------------------------
+\bibliographystyle{IEEEtran}
+
+\begin{thebibliography}{99}
+
+\bibitem{barrault2024lcm}
+L. Barrault et al., ``Large Concept Models: Language Modeling in a Sentence Representation Space,'' FAIR at Meta, Dec. 12, 2024. [Online]. Available: \url{https://github.com/facebookresearch/large_concept_model}
+
+\bibitem{duquenne2023sonar}
+P. A. Duquenne, H. Schwenk, and B. Sagot, ``SONAR: Sentence-Level Multimodal and Language-Agnostic Representations,'' \textit{AI at Meta}. [Online]. Available: \url{https://ai.meta.com/research/publications/sonar-sentence-level-multimodal-and-language-agnostic-representations/}
+
+\bibitem{rosenfeld2022ape}
+E. Rosenfeld, P. Nakkiran, H. Pouransari, O. Tuzel, and F. Faghri, ``APE: Aligning Pretrained Encoders to Quickly Learn Aligned Multimodal Representations,'' \textit{arXiv.org}, 2022. [Online]. Available: \url{https://arxiv.org/abs/2210.03927}
+
+\bibitem{li2024multimodal}
+W. Li, D. Han, J. Dezert, and Y. Yang, ``Multimodal Coordinated Representation Learning Based on Evidence Theory,'' in \textit{2024 27th International Conference on Information Fusion (FUSION)}, pp. 1--6, Jul. 2024. doi: \url{https://doi.org/10.23919/fusion59988.2024.10706295}
+
+\end{thebibliography}
+
+% -------------------------------------------------------
+\appendix
+
+\section{Detailed Literature Review}
+\label{app:litreview}
+
+% Format for each paper:
+% \subsection{PAPER TITLE}
+% \begin{enumerate}
+%     \item What is the problem?
+%     \item Why is it important?
+%     \item What are the challenges?
+%     \item What are the existing solutions and their limitations?
+%     \item What is the contribution of this work?
+% \end{enumerate}
+
+\section{Datasets}
+\label{app:datasets}
+
+Given our focus on human-computer interaction, we opted to select datasets consisting of dyadic (between two participants) dialogues. This section provides an overview of the selected datasets.
+
+\subsection{Seamless Interaction}
+
+A large-scale collection of over 4,000 hours of face-to-face interaction footage from over 4,000 participants in diverse contexts. Seamless Interaction provides full-body video as well as microphone recordings of speech.
+
+As the dataset's literature points out, in-person dialogues differ from those facilitated via video conferencing. As such, this dataset is somewhat off-target for our intended use case.
+
+The data consists of full-body video, isolated audio, time-encoded transcripts, and metadata capturing the personality and relationship between participants. Personality metadata captures 5 features: Agreeableness, Conscientiousness, Extraversion, Neuroticism, and Openness. Relationship metadata captures the degree of familiarity between participants.
+
+A subset of interactions were annotated both by the participants (first party) and external observers (third party). Annotations capture moments of interest, speaker internal state, internal state rationale, and visual elements. 4.74 hours of dyadic interactions were annotated. The full dataset size is nearly 27~TB.
+
+\subsection{Candor}
+
+An 850-hour corpus with more than 1 terabyte of audio, video, and transcripts, with moment-to-moment measures of vocal, facial, and semantic expression, together with an extensive survey of speakers' post-conversation reflections. Conversations were captured between January and November 2020; six rounds of data collection yielded a total of 1,656 dyadic conversations recorded over video chat.
+
+The dataset is labelled via pre- and post-conversational surveys of participants, providing a coarse-grained view of the participants' internal state going into and coming out of the conversations. This dataset most closely matches our target use case of facilitating simulation-based learning in video-conferencing contexts.
+
+\subsection{Data Wrangling}
+
+The general goal of data wrangling operations in this project is focused on acquiring relevant data for development and training while maintaining a minimal memory footprint. Each dataset required slightly different data-wrangling steps, as defined below.
+
+\subsubsection{Seamless Interaction}
+
+The Seamless Interaction codebase provides data-fetching utilities for acquiring interaction pairs (both sides of the conversation). Data wrangling steps included discarding the bottom two thirds of the video, deemed unnecessary for our use case. Wrangled conversation pairs take up roughly 300~MB of disk space.
+
+\subsubsection{Candor}
+
+Candor is available upon request. Data wrangling for the dataset consisted primarily of discarding redundant and unnecessary data. Wrangled conversation pairs take up roughly 200~MB of disk space.
+
+\end{document}

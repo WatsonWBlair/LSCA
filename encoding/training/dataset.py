@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -91,6 +92,55 @@ class MultimodalDataset(Dataset):
             self.ph_labels[idx],   # (MAX_PHONES,)
             self.ph_mask[idx],     # (MAX_PHONES,)
             self.p_raw[idx],       # (d_prosody,)
+        )
+
+
+class PregenDataset(Dataset):
+    """
+    Loads pregenerated backbone tokens from datasets/pregenerated/{backbone_tag}/.
+    Aggregates all session/stem subdirectories into a single flat index.
+    p_raw is raw (not z-scored) — AVAEAdapter.input_norm handles normalization.
+    """
+
+    def __init__(self, pregen_root: str, cfg: CAMELSConfig):
+        self.pregen_root = pregen_root
+        self.cfg = cfg
+        self._index: list[tuple[str, int]] = []  # (stem_dir, local_row_idx)
+        self._arrays: dict[str, dict[str, np.ndarray]] = {}  # stem_dir -> {name: mmap}
+        self._build_index()
+
+    def _build_index(self):
+        root = Path(self.pregen_root)
+        stem_dirs = sorted(p for p in root.rglob("v_raw.npy") if p.is_file())
+        for npy_path in stem_dirs:
+            stem_dir = str(npy_path.parent)
+            v = np.load(str(npy_path), mmap_mode="r")
+            n = v.shape[0]
+            if n == 0:
+                continue
+            self._arrays[stem_dir] = {
+                "v_raw": v,
+                "ph_raw": np.load(os.path.join(stem_dir, "ph_raw.npy"), mmap_mode="r"),
+                "ph_labels": np.load(os.path.join(stem_dir, "ph_labels.npy"), mmap_mode="r"),
+                "ph_mask": np.load(os.path.join(stem_dir, "ph_mask.npy"), mmap_mode="r"),
+                "p_raw": np.load(os.path.join(stem_dir, "p_raw.npy"), mmap_mode="r"),
+            }
+            for i in range(n):
+                self._index.append((stem_dir, i))
+        logger.info("PregenDataset: %d chunks from %s", len(self._index), self.pregen_root)
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def __getitem__(self, idx: int):
+        stem_dir, i = self._index[idx]
+        arrs = self._arrays[stem_dir]
+        return (
+            torch.from_numpy(arrs["v_raw"][i].astype(np.float32)),
+            torch.from_numpy(arrs["ph_raw"][i].astype(np.float32)),
+            torch.from_numpy(arrs["ph_labels"][i].astype(np.int64)),
+            torch.from_numpy(arrs["ph_mask"][i].astype(np.float32)).bool(),
+            torch.from_numpy(arrs["p_raw"][i].astype(np.float32)),
         )
 
 

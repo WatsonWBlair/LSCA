@@ -70,6 +70,27 @@ def wrangle_candor_task(c, start=1, count=None):
     print(f"Wrangled {processed} part(s)")
 
 
+@task(name="generate-tokens")
+def generate_tokens_task(c, data_root="datasets/", output_dir="outputs/features", device="cpu"):
+    """Pre-generate backbone tokens from wrangled conversations for adapter training."""
+    c.run(
+        f"python scripts/generate_tokens.py "
+        f"--data-root {data_root} --output-dir {output_dir} --device {device}"
+    )
+
+
+@task(name="generate-wrangled-tokens")
+def generate_wrangled_tokens_task(c, device="cpu", max_pairs=None):
+    """Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/."""
+    cmd = (
+        f"python scripts/generate_wrangled_tokens.py "
+        f"--device {device}"
+    )
+    if max_pairs:
+        cmd += f" --max-pairs {max_pairs}"
+    c.run(cmd)
+
+
 # =============================================================================
 # CANDOR Utilities
 # =============================================================================

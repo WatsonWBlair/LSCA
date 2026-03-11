@@ -36,15 +36,16 @@ class AVAEAdapter(nn.Module):
     At inference: embed() returns mu directly (no sampling, no decoder).
     At training:  forward() returns (mu, logvar, z, x_hat, z_prime).
 
-    Decoder reconstructs back to the original encoder output domain:
-      VideoAdapter   -> MARLIN embedding space (d_video,)
-      ProsodyAdapter -> normalized prosody     (d_prosody,)
+    Decoder reconstructs back to the raw backbone output domain:
+      VideoAdapter   -> MARLIN embedding space   (d_video,)
+      ProsodyAdapter -> raw librosa feature space (d_prosody,)
     """
 
     def __init__(self, d_in: int, d_latent: int, hidden: int):
         super().__init__()
         self.d_in = d_in
         self.d_latent = d_latent
+        self.input_norm = nn.LayerNorm(d_in)
         self.encoder = MLP([d_in, hidden, hidden], norm="layernorm")
         self.mu_head = nn.Linear(hidden, d_latent)
         self.logvar_head = nn.Linear(hidden, d_latent)
@@ -52,7 +53,7 @@ class AVAEAdapter(nn.Module):
         self.reencoder = MLP([d_in, hidden, d_latent])
 
     def encode(self, x: torch.Tensor):
-        h = self.encoder(x)
+        h = self.encoder(self.input_norm(x))
         return self.mu_head(h), self.logvar_head(h)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
