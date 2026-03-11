@@ -105,7 +105,6 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 
 - `src/data_wrangling/` — Video preprocessing pipeline (Seamless + CANDOR)
 - `tests/` — Full pytest test suite
-- `pipeline/` — **DELETED** (old 4-modality code, replaced by `encoding/`)
 
 ## Critical Design Rules
 
