@@ -8,7 +8,7 @@ import concurrent.futures
 import numpy as np
 import torch
 
-from encoding.config import CAMELSConfig
+from encoding.config import CAMELSConfig, Modality
 from encoding.pipelines.video import video_pipeline
 from encoding.pipelines.phoneme import phoneme_pipeline, pad_phonemes
 from encoding.pipelines.prosody import prosody_pipeline
@@ -67,6 +67,12 @@ def infer_chunk(
         "z_p": z_p,
         "ph_mask": ph_mask_pad,
         "segments": segments,
+        "modality_ids": {
+            "z_v": Modality.VIDEO,
+            "z_ph": Modality.PHONEME,
+            "z_ph_pooled": Modality.PHONEME,
+            "z_p": Modality.PROSODY,
+        },
     }
 
 
@@ -94,4 +100,13 @@ def infer_batch(
         z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)
         z_p = adapters["prosody_adapter"].embed(p_raw)
 
-    return {"z_v": z_v, "z_ph_pooled": z_ph_pooled, "z_p": z_p}
+    return {
+        "z_v": z_v,
+        "z_ph_pooled": z_ph_pooled,
+        "z_p": z_p,
+        "modality_ids": {
+            "z_v": Modality.VIDEO,
+            "z_ph_pooled": Modality.PHONEME,
+            "z_p": Modality.PROSODY,
+        },
+    }

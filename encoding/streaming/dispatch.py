@@ -13,7 +13,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from encoding.config import CAMELSConfig
+from encoding.config import CAMELSConfig, Modality
 from encoding.pipelines.video import video_pipeline
 from encoding.pipelines.phoneme import phoneme_pipeline, pad_phonemes
 from encoding.pipelines.prosody import prosody_pipeline
@@ -98,7 +98,12 @@ def run_all_pipelines(
     Returns True on success, False if zero rows appended.
     """
     # Register chunk
-    entry = {"id": chunk_id, "start_sec": round(start_sec, 3), "end_sec": round(end_sec, 3)}
+    entry = {
+        "id": chunk_id,
+        "start_sec": round(start_sec, 3),
+        "end_sec": round(end_sec, 3),
+        "modalities": [m.name.lower() for m in Modality],
+    }
     chunk_registry.append(entry)
     save_chunk_registry(output_dir, chunk_registry, cfg)
 
@@ -186,6 +191,7 @@ def handle_silent_chunk(
         "start_sec": round(start_sec, 3),
         "end_sec": round(end_sec, 3),
         "silent": True,
+        "modalities": [m.name.lower() for m in Modality],
     }
     chunk_registry.append(entry)
     save_chunk_registry(output_dir, chunk_registry, cfg)

@@ -1,7 +1,7 @@
 # tests/test_config.py
 # Config validation, dimension consistency, modality toggle.
 
-from encoding.config import CAMELSConfig, LatentConfig, ModalityConfig
+from encoding.config import CAMELSConfig, LatentConfig, Modality, ModalityConfig
 
 
 def test_default_config():
@@ -53,6 +53,23 @@ def test_streaming_seg_total():
     cfg = CAMELSConfig()
     expected = (cfg.streaming.seg_hops + cfg.streaming.rc_hops) * cfg.streaming.hop
     assert cfg.streaming.seg_total == expected
+
+
+def test_modality_enum_values():
+    assert int(Modality.VIDEO) == 0
+    assert int(Modality.PHONEME) == 1
+    assert int(Modality.PROSODY) == 2
+
+
+def test_modality_enum_count():
+    assert len(Modality) == 3
+
+
+def test_modality_enum_json_serializable():
+    import json
+    data = {"modality": Modality.VIDEO}
+    dumped = json.dumps(data)
+    assert '"modality": 0' in dumped
 
 
 def test_dimension_consistency(cfg):

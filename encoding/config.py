@@ -6,6 +6,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
+
+
+class Modality(IntEnum):
+    """Integer-tagged modality identifiers for the shared latent space."""
+    VIDEO = 0
+    PHONEME = 1
+    PROSODY = 2
 
 
 @dataclass
