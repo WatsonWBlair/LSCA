@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from pipeline.config import D_VIDEO, D_AUDIO, D_PROSODY, D_LATENT
+from src.encoding.utils.config import D_VIDEO, D_AUDIO, D_PROSODY, D_LATENT
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +139,11 @@ def extract_raw_features(
              (uses pre-transcribed words from the dataset's metadata:transcript)
     """
     import librosa
-    from pipeline.video_pipeline   import extract_video_file
-    from pipeline.audio_pipeline   import audio_pipeline
-    from pipeline.prosody_pipeline import prosody_pipeline
-    from pipeline.text_pipeline    import encode_text_sonar
-    from pipeline.config           import SAMPLE_RATE, DEFAULT_LANG, WINDOW_SEC, STRIDE_SEC
+    from src.encoding.pipelines.video_pipeline   import extract_video_file
+    from src.encoding.pipelines.audio_pipeline   import audio_pipeline
+    from src.encoding.pipelines.prosody_pipeline import prosody_pipeline
+    from src.encoding.pipelines.text_pipeline    import encode_text_sonar
+    from src.encoding.utils.config           import SAMPLE_RATE, DEFAULT_LANG, WINDOW_SEC, STRIDE_SEC
 
     os.makedirs(output_dir, exist_ok=True)
 

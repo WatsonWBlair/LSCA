@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from pipeline.config import D_LATENT
+from src.encoding.utils.config import D_LATENT
 
 
 # ── InfoNCE (NT-Xent) ─────────────────────────────────────────────────────────

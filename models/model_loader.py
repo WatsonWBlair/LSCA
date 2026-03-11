@@ -6,7 +6,7 @@ import logging
 import torch
 import torchaudio
 
-from pipeline.config import (
+from src.encoding.utils.config import (
     MARLIN_MODEL_NAME, WAV2VEC2_MODEL, SONAR_ENCODER, SONAR_TOKENIZER,
 )
 

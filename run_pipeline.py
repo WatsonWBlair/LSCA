@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # run_pipeline.py
-# Live streaming entry point for the CAMELS pipeline.
-# Starts all threads (audio buffer, frame buffer, Emformer ASR, scheduler)
-# and runs until interrupted.
+# Live streaming entry point for the CAMELS pipeline (v8.1).
+# 3 modalities: video, phoneme, prosody + transcript utility.
 #
 # Usage:
 #   python run_pipeline.py [--device cuda] [--output-dir ./run_output]
 #                          [--camera 0] [--checkpoint checkpoints/stage_c_epoch020.pt]
-#                          [--language eng_Latn]
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -31,14 +30,14 @@ logger = logging.getLogger("run_pipeline")
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="CAMELS live streaming pipeline")
-    p.add_argument("--device",      default="cpu",   help="cpu | cuda | mps")
-    p.add_argument("--output-dir",  default="run_output", help="Directory for .npy output files")
-    p.add_argument("--camera",      default=0, type=int, help="Camera index (default: 0)")
-    p.add_argument("--checkpoint",  default=None, help="Path to .pt adapter checkpoint")
-    p.add_argument("--language",    default="eng_Latn", help="SONAR language code")
+    p = argparse.ArgumentParser(description="CAMELS v8.1 live streaming pipeline")
+    p.add_argument("--device",        default="cpu",        help="cpu | cuda | mps")
+    p.add_argument("--output-dir",    default="run_output", help="Directory for .npy output files")
+    p.add_argument("--camera",        default=0, type=int,  help="Camera index (default: 0)")
+    p.add_argument("--checkpoint",    default=None,         help="Path to .pt adapter checkpoint")
     p.add_argument("--prosody-stats", default="prosody_stats.json",
                    help="Path to prosody_stats.json (from training)")
+    p.add_argument("--d-latent",      default=768, type=int, help="Latent dimension")
     return p.parse_args()
 
 
@@ -46,91 +45,102 @@ def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # ── 1. Load frozen models ─────────────────────────────────────────────
+    from encoding.config import CAMELSConfig, LatentConfig
+    from encoding.models.loader import load_all_models
+    from encoding.adapters.registry import build_adapters, load_adapters
+    from encoding.streaming.buffers import AudioBuffer, FrameBuffer
+    from encoding.streaming.scheduler import FixedStrideScheduler
+    from encoding.streaming.dispatch import run_all_pipelines, handle_silent_chunk
+    from encoding.pipelines.transcript import EmformerASR
+
+    cfg = CAMELSConfig(
+        latent=LatentConfig(d_latent=args.d_latent),
+    )
+
+    # ── 1. Load frozen models ─────────────────────────────────────────
     logger.info("Loading frozen models (device=%s) ...", args.device)
-    from models.model_loader import load_all_models
-    models = load_all_models(device=args.device)
+    models = load_all_models(cfg, device=args.device)
 
-    # ── 2. Load / build adapters ──────────────────────────────────────────
-    from pipeline.adapters import build_adapters, load_adapters
-    from pipeline.config   import D_AUDIO
+    # Auto-detect phoneme classes
+    if "num_phoneme_classes" in models:
+        cfg.latent.num_phoneme_classes = models["num_phoneme_classes"]
 
+    # ── 2. Load / build adapters ──────────────────────────────────────
     if args.checkpoint and os.path.exists(args.checkpoint):
         logger.info("Loading adapters from checkpoint: %s", args.checkpoint)
-        adapters = load_adapters(args.checkpoint, d_audio=D_AUDIO, device=args.device)
+        adapters = build_adapters(cfg)
+        load_adapters(adapters, args.checkpoint, device=args.device)
     else:
         logger.info("No checkpoint provided — using untrained adapters")
-        adapters = build_adapters(d_audio=D_AUDIO)
-        for mod in adapters.values():
-            mod.to(args.device).eval()
+        adapters = build_adapters(cfg)
 
-    # ── 3. Load prosody stats ─────────────────────────────────────────────
-    from pipeline.prosody_pipeline import load_prosody_stats
+    for mod in adapters.values():
+        mod.to(args.device).eval()
+
+    # ── 3. Load prosody stats ─────────────────────────────────────────
     prosody_stats = None
     if os.path.exists(args.prosody_stats):
-        prosody_stats = load_prosody_stats(args.prosody_stats)
+        with open(args.prosody_stats) as f:
+            prosody_stats = json.load(f)
+        logger.info("Loaded prosody stats from %s", args.prosody_stats)
     else:
         logger.warning("prosody_stats.json not found — prosody will be un-normalized")
 
-    # ── 4. Start AudioBuffer + sounddevice stream ─────────────────────────
-    from pipeline.buffers  import AudioBuffer, FrameBuffer
-    from pipeline.config   import SAMPLE_RATE
-
-    audio_buffer = AudioBuffer()
+    # ── 4. Start AudioBuffer + sounddevice stream ─────────────────────
+    audio_buffer = AudioBuffer(cfg)
     stream = sd.InputStream(
-        samplerate=SAMPLE_RATE,
+        samplerate=cfg.streaming.sample_rate,
         channels=1,
         dtype="float32",
         callback=audio_buffer.callback,
     )
 
-    # ── 5. Start FrameBuffer (camera + MediaPipe face detect) ─────────────
-    frame_buffer = FrameBuffer()
+    # ── 5. Start FrameBuffer (camera + MediaPipe face detect) ─────────
+    frame_buffer = FrameBuffer(cfg)
     frame_buffer.start_capture(camera_index=args.camera)
 
-    # ── 6. Start Emformer ASR background thread ───────────────────────────
-    from pipeline.text_pipeline import EmformerASR
+    # ── 6. Start Emformer ASR ─────────────────────────────────────────
     asr = EmformerASR(models, output_dir=args.output_dir)
     asr.start(audio_buffer._buf)
 
-    # ── 7. Set up dispatcher callbacks ────────────────────────────────────
-    from pipeline.dispatch   import run_all_pipelines, handle_silent_chunk
+    # ── 7. Set up dispatcher callbacks ────────────────────────────────
     chunk_registry: list = []
 
     def on_chunk(chunk_id, start_sec, end_sec):
         run_all_pipelines(
-            chunk_id     = chunk_id,
-            start_sec    = start_sec,
-            end_sec      = end_sec,
-            frame_buffer = frame_buffer,
-            audio_buffer = audio_buffer,
-            asr          = asr,
-            models       = models,
-            adapters     = adapters,
-            prosody_stats = prosody_stats,
-            output_dir   = args.output_dir,
-            chunk_registry = chunk_registry,
-            language     = args.language,
+            chunk_id=chunk_id,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            frame_buffer=frame_buffer,
+            audio_buffer=audio_buffer,
+            asr=asr,
+            models=models,
+            adapters=adapters,
+            prosody_stats=prosody_stats,
+            output_dir=args.output_dir,
+            chunk_registry=chunk_registry,
+            cfg=cfg,
         )
 
     def on_silent(chunk_id, start_sec, end_sec):
         handle_silent_chunk(
-            chunk_id       = chunk_id,
-            start_sec      = start_sec,
-            end_sec        = end_sec,
-            output_dir     = args.output_dir,
-            chunk_registry = chunk_registry,
+            chunk_id=chunk_id,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            output_dir=args.output_dir,
+            chunk_registry=chunk_registry,
+            cfg=cfg,
         )
 
-    # ── 8. Start FixedStrideScheduler ─────────────────────────────────────
-    from pipeline.scheduler import FixedStrideScheduler
+    # ── 8. Start FixedStrideScheduler ─────────────────────────────────
     scheduler = FixedStrideScheduler(
-        audio_buffer = audio_buffer,
-        on_chunk     = on_chunk,
-        on_silent    = on_silent,
+        audio_buffer=audio_buffer,
+        on_chunk=on_chunk,
+        on_silent=on_silent,
+        cfg=cfg,
     )
 
-    # ── 9. Graceful shutdown ──────────────────────────────────────────────
+    # ── 9. Graceful shutdown ──────────────────────────────────────────
     def shutdown(sig=None, frame=None):
         logger.info("\nShutting down CAMELS pipeline ...")
         scheduler.stop()
@@ -147,13 +157,14 @@ def main():
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # ── 10. Start streaming ───────────────────────────────────────────────
-    logger.info("Starting live streaming — press Ctrl+C to stop")
+    # ── 10. Start streaming ───────────────────────────────────────────
+    logger.info("Starting CAMELS v8.1 live streaming — press Ctrl+C to stop")
     logger.info("Output dir: %s", os.path.abspath(args.output_dir))
+    logger.info("Modalities: video=%s, phoneme=%s, prosody=%s",
+                cfg.modality.video_enabled, cfg.modality.phoneme_enabled, cfg.modality.prosody_enabled)
     stream.start()
     scheduler.start()
 
-    # Keep main thread alive
     try:
         while True:
             time.sleep(1.0)

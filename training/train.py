@@ -13,7 +13,7 @@ from typing import Optional
 import torch
 import torch.optim as optim
 
-from pipeline.config  import D_LATENT
+from src.encoding.utils.config  import D_LATENT
 from training.losses  import all_pairs_nce, all_avae_loss, bidirectional_fm_loss, monitor_nce_pairs
 from training.evaluate import run_evaluation
 
@@ -401,7 +401,7 @@ def _log_pair_losses(loader, adapters, device, temperature, epoch, stage):
 
 
 def _save_checkpoint(adapters, checkpoint_dir, stage_name, epoch):
-    from pipeline.adapters import save_adapters
+    from src.encoding.adapters import save_adapters
     path = os.path.join(checkpoint_dir, f"{stage_name}_epoch{epoch:03d}.pt")
     save_adapters(adapters, path)
     logger.info("Checkpoint saved: %s", path)

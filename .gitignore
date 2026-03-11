@@ -1,3 +1,66 @@
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+.codacy
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# IDE files
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# AI/ML artifacts
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.h5
+*.tflite
+datasets/
+wrangled/
+logs/
+*.log
+runs/
+wandb/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Pre-signed URLs (contain temporary credentials)
+file_urls.txt
 # ============================================================
 # CAMELS Capstone — .gitignore
 # ============================================================
