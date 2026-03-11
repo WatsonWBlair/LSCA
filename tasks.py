@@ -52,21 +52,6 @@ def freeze(c):
 # Data Wrangling
 # =============================================================================
 
-@task(name="wrangle-dev")
-def wrangle_dev(c):
-    """Process small dev dataset (3 Seamless + 1 CANDOR)."""
-    from src.data_wrangling.seamless_interaction.wrangle import wrangle_seamless
-    from src.data_wrangling.candor.download import wrangle_candor
-
-    print("=== Seamless Interaction ===")
-    wrangle_seamless(3)
-
-    print("\n=== CANDOR ===")
-    wrangle_candor(CANDOR_URLS, CANDOR_DIR, count=1)
-
-    print("\n=== Dev dataset ready ===")
-
-
 @task(name="wrangle-seamless")
 def wrangle_seamless_task(c, count=1, style="improvised", split="dev"):
     """Process N Seamless Interaction pairs (clean-as-you-go)."""
@@ -81,7 +66,7 @@ def wrangle_candor_task(c, start=1, count=None):
 
     start = int(start)
     count = int(count) if count else None
-    processed = wrangle_candor(CANDOR_URLS, CANDOR_DIR, start=start, count=count)
+    processed = wrangle_candor(CANDOR_DIR, start=start, count=count)
     print(f"Wrangled {processed} part(s)")
 
 

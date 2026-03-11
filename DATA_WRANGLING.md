@@ -7,7 +7,8 @@ This document covers data source selection and preprocessing for the LSCA projec
 ## Quick Start
 
 ```bash
-invoke wrangle-dev
+invoke wrangle-seamless --count 3
+invoke wrangle-candor --count 1
 ```
 
 Downloads and processes a small development dataset (3 Seamless Interaction pairs + 1 CANDOR part).
@@ -29,7 +30,7 @@ Each item is fully processed before the next is downloaded, keeping peak disk us
 
 4,000+ hours of in-person face-to-face interaction footage from 4,000+ participants.
 
-> Note: In-person interactions differ from video calls in turn-taking and gaze patterns ([Tian et al., 2024](./litrature/DataSets/Seamless%20Interaction-%20Dyadic%20Audiovisual%20Motion%20Modeling%20and%20Large-Scale%20Dataset.pdf)), but the dataset's goals align with ours: training agents with natural gestures, modeling turn-taking, and understanding multimodal social dynamics.
+> Note: In-person interactions differ from video calls in turn-taking and gaze patterns ([Tian et al., 2024](./litrature/datawrangling/Seamless_Interaction.pdf)), but the dataset's goals align with ours: training agents with natural gestures, modeling turn-taking, and understanding multimodal social dynamics.
 
 ### Wrangling
 
@@ -69,7 +70,7 @@ Participants in the same interaction share session and interaction IDs, enabling
 invoke wrangle-candor
 ```
 
-Iteratively processes each part: download zip → extract → extract per-participant audio → cleanup. Supports resume via marker files.
+Two-step workflow: first download zips with `invoke download-candor`, then extract and process with `invoke wrangle-candor`. Both commands support resume via marker files.
 
 **Options:**
 - `--start N` — Part number to start from (default: 1)

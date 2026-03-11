@@ -26,7 +26,6 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 **Data Wrangling** (clean-as-you-go processing):
 | Command | Description |
 |---------|-------------|
-| `invoke wrangle-dev` | Small dev dataset (3 Seamless + 1 CANDOR) |
 | `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
 | `invoke wrangle-candor` | Process CANDOR dataset iteratively |
 
@@ -117,7 +116,3 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 - FM loss: adapters **detached** — only VelocityNets receive gradients
 - PhonemeAdapter is **linear** (not AVAE) — verification uses PhonemeProbeHead instead
 
-## Python Environment
-
-- **Always use**: `/Users/katyasha1/capstone/.venv/bin/python3.11`
-- The venv symlink is `python3.11` (no `python3` alias)

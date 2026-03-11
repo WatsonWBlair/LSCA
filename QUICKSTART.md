@@ -48,14 +48,6 @@ invoke test
 
 All wrangling commands use memory-efficient processing—each item is fully processed before the next is downloaded.
 
-### Quick Dev Dataset
-
-```bash
-invoke wrangle-dev
-```
-
-Downloads and processes 3 Seamless Interaction pairs + 1 CANDOR part (~500MB working space).
-
 ### Seamless Interaction
 
 ```bash
@@ -68,11 +60,12 @@ Each pair is downloaded, cropped to webcam framing, and cleaned up before the ne
 ### CANDOR Corpus
 
 ```bash
-# Process all 166 parts (or use --count to limit)
+# Download zips first (requires pre-signed URLs in src/data_wrangling/candor/file_urls.txt)
+invoke download-candor --count 5
+
+# Then extract and process the downloaded zips
 invoke wrangle-candor --count 5
 ```
-
-Requires pre-signed URLs in `src/data_wrangling/candor/file_urls.txt`.
 
 ## Output Structure
 
@@ -97,9 +90,9 @@ datasets/candor/                # CANDOR output
 
 | Command | Description |
 |---------|-------------|
-| `invoke wrangle-dev` | Small dev dataset (3 Seamless + 1 CANDOR) |
 | `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
-| `invoke wrangle-candor` | Process CANDOR dataset iteratively |
+| `invoke download-candor` | Download CANDOR zips (requires file_urls.txt) |
+| `invoke wrangle-candor` | Extract and process downloaded CANDOR zips |
 | `invoke test` | Run pytest tests |
 | `invoke lint` | Run ruff linter |
 

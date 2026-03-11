@@ -1,14 +1,14 @@
-
-
-#Ignore vscode AI rules
+# Codacy / CI config
 .github/instructions/codacy.instructions.md
 .codacy
 
 # Python bytecode
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
 *.pyd
+*.so
+*.whl
 
 # Virtual environments
 venv/
@@ -21,7 +21,7 @@ build/
 *.egg-info/
 *.egg
 
-# IDE files
+# IDE / Editor
 .idea/
 .vscode/
 .claude/
@@ -29,98 +29,48 @@ build/
 *.swo
 *~
 
-# Environment files
+# Environment / secrets
 .env
-.env.local
+.env.*
+*.pem
+*.key
 
-# Jupyter notebook checkpoints
+# Jupyter
 .ipynb_checkpoints/
 
-# AI/ML artifacts
+# AI/ML model artifacts
 *.pt
 *.pth
 *.onnx
 *.safetensors
 *.h5
 *.tflite
+
+# Datasets and outputs (download your own — see DATA_WRANGLING.md)
 datasets/
-wrangled/
-logs/
-*.log
-runs/
-wandb/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Testing / coverage
-.pytest_cache/
-htmlcov/
-.coverage
-
-# Pre-signed URLs (contain temporary credentials)
-file_urls.txt
-# ============================================================
-# CAMELS Capstone — .gitignore
-# ============================================================
-
-# ----- Virtual Environments -----
-.venv/
-venv/
-env/
-
-# ----- Datasets (download your own — see README) -----
-data/
-
-# ----- Pre-trained Model Weights (auto-downloaded at runtime) -----
-.marlin/
-
-# ----- Training Checkpoints & Outputs -----
 checkpoints/
 checkpoints_test/
 checkpoints_*/
 outputs/
 run_output/
+runs/
+wandb/
+logs/
+*.log
 
-# ----- Python -----
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-*.egg
-dist/
-build/
-*.whl
-*.so
-
-# ----- Linters / Type-checkers / Test Caches -----
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-
-# ----- Jupyter -----
-.ipynb_checkpoints/
-
-# ----- OS Files -----
+# OS files
 .DS_Store
 Thumbs.db
 
-# ----- IDE / Editor -----
-.vscode/
-.idea/
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
 
-# ----- Logs -----
-*.log
-
-# ----- Seamless Interaction (Facebook clone — install separately) -----
+# Seamless Interaction library (install separately — see QUICKSTART.md)
 seamless_interaction/
 
-# ----- Claude Code local config -----
-.claude/
-
-# ----- Secrets (just in case) -----
-.env
-.env.*
-*.pem
-*.key
+# Pre-signed S3 URLs (contain temporary credentials)
+file_urls.txt
