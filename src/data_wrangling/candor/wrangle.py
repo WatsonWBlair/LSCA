@@ -27,7 +27,7 @@ def extract_vad(conv_dir: Path, user_id: str) -> list[dict]:
     current_start = None
     current_end = None
 
-    with open(csv_path, newline="") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row["user_id"] != user_id:
@@ -121,7 +121,7 @@ def extract_survey(conv_dir: Path, user_id: str) -> dict:
     if not survey_path.exists():
         return {}
 
-    with open(survey_path, newline="") as f:
+    with open(survey_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row.get("user_id") == user_id:
@@ -135,7 +135,7 @@ def extract_avf(conv_dir: Path, user_id: str) -> list[dict]:
     csv_path = conv_dir / "audio_video_features.csv"
     rows = []
 
-    with open(csv_path, newline="") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row["user_id"] != user_id:

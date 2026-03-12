@@ -109,6 +109,32 @@ invoke generate-wrangled-tokens
 
 Runs all wrangled files through the frozen encoders and saves outputs to `datasets/pregenerated/`.
 
+### Storage Estimates: Pregenerated Tokens
+
+Token files are written per participant-video into `datasets/pregenerated/{backbone_tag}/{session}/{stem}/`.
+Each 2-second chunk (1-second stride) produces the following rows:
+
+| File | Shape per chunk | Dtype | Size per chunk |
+|------|----------------|-------|----------------|
+| `v_raw.npy` | (768,) | float32 | 3 KB |
+| `ph_raw.npy` | (50, 768) | float32 | **150 KB** ← dominates |
+| `ph_labels.npy` | (50,) | int64 | ~0.4 KB |
+| `ph_mask.npy` | (50,) | int64 | ~0.4 KB |
+| `p_raw.npy` | (22,) | float32 | <1 KB |
+| **Total** | | | **~154 KB/chunk** |
+
+Chunk rate: **~3,600 chunks per hour** of footage.
+
+**Full-dataset estimates:**
+
+| Dataset | Scale | Estimated tokens |
+|---------|-------|-----------------|
+| CANDOR | 1,650 conversations × 2 participants × ~900 chunks (~15 min avg) | **~440 GB** |
+| Seamless Interaction | ~540 MB per hour of footage processed | **~2 TB** (all 4,000+ hrs) |
+
+> `ph_raw` accounts for ~97% of token storage. If memory is constrained, consider processing
+> in per-session batches rather than generating all tokens upfront.
+
 ### Utility Commands
 
 For debugging or archival workflows:

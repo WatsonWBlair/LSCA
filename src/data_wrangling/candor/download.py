@@ -151,13 +151,20 @@ def process_part(zip_path: Path, output_dir: Path) -> bool:
 
     # Extract zip if not already extracted
     extracted_marker = output_dir / f"{part_name}_extracted"
+    part_num = zip_path.stem.split("_")[-1]  # 'raw_media_part_004' -> '004'
+    part_dir = output_dir / part_num
     if not extracted_marker.exists():
-        extract_part(zip_path, output_dir)
+        if not part_dir.is_dir():
+            part_dir.mkdir(parents=True, exist_ok=True)
+            extract_part(zip_path, part_dir)
         extracted_marker.touch()
 
     # Process all conversations with raw/ directories
-    for conv_dir in output_dir.iterdir():
-        if not conv_dir.is_dir() or conv_dir.name.startswith('raw_media_part'):
+    if not part_dir.is_dir():
+        logger.warning("Part directory %s not found after extraction — skipping", part_dir)
+        return False
+    for conv_dir in sorted(part_dir.iterdir()):
+        if not conv_dir.is_dir():
             continue
         raw_dir = conv_dir / "raw"
         if not raw_dir.exists():
@@ -171,7 +178,6 @@ def process_part(zip_path: Path, output_dir: Path) -> bool:
 
         # Wrangle into datasets/wrangled/
         from src.data_wrangling.candor.wrangle import wrangle_conversation
-        part_num = zip_path.stem.split("_")[-1]  # 'raw_media_part_004' -> '004'
         wrangle_conversation(conv_dir, part_num, Path("datasets/wrangled"))
 
         # Remove raw/ directory
