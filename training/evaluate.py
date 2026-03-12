@@ -1,410 +1,276 @@
-# training/evaluate.py
-# All evaluation metrics for the CAMELS training protocol.
-# Run after every 5 epochs during Stages A, B, C, and on the final test set.
-# Ref: Wang & Isola 2020 (uniformity); SimCLR Chen et al. 2020 (linear probe)
+# encoding/training/evaluate.py
+# Evaluation metrics for 3-modality CAMELS v8.1 training.
+# Adapted from v7: 3 modalities, 3 pairs, 6 retrieval directions.
+
+from __future__ import annotations
 
 import logging
+from itertools import combinations
 from typing import Dict, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
+from config import CAMELSConfig
+
 logger = logging.getLogger(__name__)
 
 
-# ── Intra-chunk alignment ─────────────────────────────────────────────────────
-
-def eval_intra_chunk_alignment(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
+def eval_intra_chunk_alignment(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
     """
-    For every chunk in the val set: compute pairwise cosine similarity between
-    all 4 modality vectors for the SAME chunk (positive pairs).
-    Average over all 6 pairs and all chunks.
-    This is the primary quality metric for the HyperGNN handoff.
-
-    Target: intra_alignment_mean > 0.5 after Stage A.
+    Cosine similarity between same-chunk embeddings (positive pairs).
+    Target: > 0.5 after Stage A.
     """
-    pairs = [
-        (z_v, z_a, "v-a"),
-        (z_v, z_p, "v-p"),
-        (z_v, z_t, "v-t"),
-        (z_a, z_p, "a-p"),
-        (z_a, z_t, "a-t"),
-        (z_p, z_t, "p-t"),
-    ]
+    names = sorted(z_dict.keys())
     results = {}
-    for za, zb, name in pairs:
+    for n1, n2 in combinations(names, 2):
         sim = F.cosine_similarity(
-            F.normalize(za, dim=-1),
-            F.normalize(zb, dim=-1),
-        )   # (N,)
-        results[f"intra_alignment_{name}"] = sim.mean().item()
-
+            F.normalize(z_dict[n1], dim=-1),
+            F.normalize(z_dict[n2], dim=-1),
+        )
+        results[f"intra_alignment_{n1}_{n2}"] = sim.mean().item()
     results["intra_alignment_mean"] = float(np.mean(list(results.values())))
     return results
 
 
-# ── Inter-chunk separation ────────────────────────────────────────────────────
-
-def eval_inter_chunk_separation(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
+def eval_inter_chunk_separation(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
     """
-    Mean cosine similarity between the SAME modality across DIFFERENT chunks.
-    Should be low — confirms the latent space is not collapsed.
-
-    Target: < 0.2 for all modalities.
-    Warning: if > 0.5, the latent space has collapsed.
+    Mean cosine sim between same modality, different chunks. Target: < 0.2.
     """
     results = {}
-    for z, name in [(z_v, "v"), (z_a, "a"), (z_p, "p"), (z_t, "t")]:
-        z_norm     = F.normalize(z, dim=-1)
-        sim_matrix = torch.matmul(z_norm, z_norm.T)   # (N, N)
-        # Exclude diagonal (self-similarity = 1.0)
+    for name, z in z_dict.items():
+        z_norm = F.normalize(z, dim=-1)
+        sim = torch.matmul(z_norm, z_norm.T)
         mask = ~torch.eye(len(z), dtype=torch.bool, device=z.device)
-        results[f"inter_sep_{name}"] = sim_matrix[mask].mean().item()
+        results[f"inter_sep_{name}"] = sim[mask].mean().item()
     return results
 
 
-# ── Cross-modal retrieval (8 directions) ────────────────────────────────────
-
-def eval_retrieval(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
-    """
-    Cross-modal R@1 and R@5 retrieval in all 12 non-self directions.
-    Given a query embedding from one modality, retrieve the matching
-    chunk from another modality by nearest-neighbour cosine search.
-
-    Targets (after Stage A):
-      R@1 > 0.50  (each of 12 directions)
-      R@5 > 0.75
-    """
-    modalities = [("video", z_v), ("audio", z_a), ("prosody", z_p), ("text", z_t)]
-    results    = {}
-
-    for src_name, src in modalities:
-        for tgt_name, tgt in modalities:
+def eval_retrieval(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Cross-modal R@1 and R@5 retrieval in all directions."""
+    names = sorted(z_dict.keys())
+    results = {}
+    for src_name in names:
+        for tgt_name in names:
             if src_name == tgt_name:
                 continue
-            sims   = torch.matmul(
-                F.normalize(src, dim=-1),
-                F.normalize(tgt, dim=-1).T,
-            )                                               # (N, N)
-            ranked = sims.argsort(dim=1, descending=True)  # (N, N) — closest first
+            src = z_dict[src_name]
+            tgt = z_dict[tgt_name]
+            sims = torch.matmul(F.normalize(src, dim=-1), F.normalize(tgt, dim=-1).T)
+            ranked = sims.argsort(dim=1, descending=True)
             labels = torch.arange(len(src), device=src.device)
-
             r1 = (ranked[:, 0] == labels).float().mean().item()
             r5 = (ranked[:, :5] == labels.unsqueeze(1)).any(dim=1).float().mean().item()
-
             results[f"R@1_{src_name}->{tgt_name}"] = r1
             results[f"R@5_{src_name}->{tgt_name}"] = r5
-
     return results
 
-
-# ── Alignment uniformity ──────────────────────────────────────────────────────
 
 def eval_uniformity(z: torch.Tensor, name: str = "") -> float:
-    """
-    Uniformity metric from Wang & Isola (ICML 2020).
-    log( mean( exp(-2 * pairwise_sq_dist) ) )
-    Lower value = more uniformly spread on unit sphere.
-    Target: stable or decreasing across stages.
-    """
-    z_norm  = F.normalize(z, dim=-1)
+    """Wang & Isola uniformity metric. Lower = more uniform on unit sphere."""
+    z_norm = F.normalize(z, dim=-1)
     sq_dist = torch.pdist(z_norm, p=2).pow(2)
-    u       = sq_dist.mul(-2).exp().mean().log().item()
-    if name:
-        logger.debug("Uniformity [%s]: %.4f", name, u)
-    return u
+    return sq_dist.mul(-2).exp().mean().log().item()
 
 
-def eval_uniformity_all(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
-    return {
-        "uniformity_v": eval_uniformity(z_v, "v"),
-        "uniformity_a": eval_uniformity(z_a, "a"),
-        "uniformity_p": eval_uniformity(z_p, "p"),
-        "uniformity_t": eval_uniformity(z_t, "t"),
-    }
+def eval_uniformity_all(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    return {f"uniformity_{name}": eval_uniformity(z) for name, z in z_dict.items()}
 
 
-# ── Cosine margin (per pair) ──────────────────────────────────────────────────
-
-def eval_cosine_margin(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
-    """
-    For each pair: mean_sim(same chunk) - mean_sim(diff chunk).
-    Target: > 0.3 for each pair after Stage A.
-    """
-    pairs = [
-        (z_v, z_a, "v-a"),
-        (z_v, z_p, "v-p"),
-        (z_v, z_t, "v-t"),
-        (z_a, z_p, "a-p"),
-        (z_a, z_t, "a-t"),
-        (z_p, z_t, "p-t"),
-    ]
+def eval_cosine_margin(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """pos_mean - neg_mean per pair. Target: > 0.3."""
+    names = sorted(z_dict.keys())
     results = {}
-    for za, zb, name in pairs:
-        za_n = F.normalize(za, dim=-1)
-        zb_n = F.normalize(zb, dim=-1)
-        sim_matrix = torch.matmul(za_n, zb_n.T)   # (N, N)
-
-        N    = sim_matrix.shape[0]
-        mask = torch.eye(N, dtype=torch.bool, device=za.device)
-
-        pos_mean = sim_matrix[mask].mean().item()
-        neg_mean = sim_matrix[~mask].mean().item()
-        results[f"margin_{name}"] = pos_mean - neg_mean
-
+    for n1, n2 in combinations(names, 2):
+        za_n = F.normalize(z_dict[n1], dim=-1)
+        zb_n = F.normalize(z_dict[n2], dim=-1)
+        sim = torch.matmul(za_n, zb_n.T)
+        N = sim.shape[0]
+        mask = torch.eye(N, dtype=torch.bool, device=za_n.device)
+        pos_mean = sim[mask].mean().item()
+        neg_mean = sim[~mask].mean().item()
+        results[f"margin_{n1}_{n2}"] = pos_mean - neg_mean
     return results
 
 
-# ── ROC-AUC per pair ──────────────────────────────────────────────────────────
-
-def eval_roc_auc(
-    z_v: torch.Tensor,
-    z_a: torch.Tensor,
-    z_p: torch.Tensor,
-    z_t: torch.Tensor,
-) -> Dict[str, float]:
-    """
-    Binary ROC-AUC: positive = same-chunk pair, negative = cross-chunk pair.
-    Target: > 0.85 per pair.
-    Uses only a random subsample of N^2 pairs for efficiency.
-    """
+def eval_roc_auc(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Binary ROC-AUC: same-chunk vs cross-chunk. Target: > 0.85."""
     from sklearn.metrics import roc_auc_score
-
-    pairs = [
-        (z_v, z_a, "v-a"),
-        (z_v, z_p, "v-p"),
-        (z_v, z_t, "v-t"),
-        (z_a, z_p, "a-p"),
-        (z_a, z_t, "a-t"),
-        (z_p, z_t, "p-t"),
-    ]
+    names = sorted(z_dict.keys())
     results = {}
-    for za, zb, name in pairs:
-        za_n = F.normalize(za, dim=-1)
-        zb_n = F.normalize(zb, dim=-1)
-        sim  = torch.matmul(za_n, zb_n.T)   # (N, N)
-        N    = sim.shape[0]
-        mask = torch.eye(N, dtype=torch.bool, device=za.device)
-
+    for n1, n2 in combinations(names, 2):
+        za_n = F.normalize(z_dict[n1], dim=-1)
+        zb_n = F.normalize(z_dict[n2], dim=-1)
+        sim = torch.matmul(za_n, zb_n.T)
+        N = sim.shape[0]
+        mask = torch.eye(N, dtype=torch.bool, device=za_n.device)
         scores = sim.cpu().numpy().flatten()
         labels = mask.cpu().numpy().flatten().astype(int)
-
         try:
-            auc = roc_auc_score(labels, scores)
+            results[f"roc_auc_{n1}_{n2}"] = roc_auc_score(labels, scores)
         except Exception:
-            auc = 0.5
-        results[f"roc_auc_{name}"] = auc
-
+            results[f"roc_auc_{n1}_{n2}"] = 0.5
     return results
 
-
-# ── Linear probe per modality ─────────────────────────────────────────────────
-
-def eval_linear_probe(
-    z_train: torch.Tensor,
-    y_train: torch.Tensor,
-    z_val:   torch.Tensor,
-    y_val:   torch.Tensor,
-    name:    str = "",
-) -> Dict[str, float]:
-    """
-    Fit a LogisticRegression on frozen embeddings to test discriminability.
-    Ref: SimCLR, Chen et al. 2020.
-    Returns accuracy and macro-F1.
-    """
-    from sklearn.linear_model  import LogisticRegression
-    from sklearn.metrics        import f1_score
-
-    clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", multi_class="auto")
-    clf.fit(z_train.cpu().numpy(), y_train.cpu().numpy())
-
-    y_pred = clf.predict(z_val.cpu().numpy())
-    acc    = float(clf.score(z_val.cpu().numpy(), y_val.cpu().numpy()))
-    f1     = float(f1_score(y_val.cpu().numpy(), y_pred, average="macro", zero_division=0))
-
-    if name:
-        logger.info("Linear probe [%s]: acc=%.3f  macro-F1=%.3f", name, acc, f1)
-    return {f"probe_acc_{name}": acc, f"probe_f1_{name}": f1}
-
-
-# ── AVAE reconstruction MSE ───────────────────────────────────────────────────
 
 def eval_reconstruction_mse(
     val_loader,
     adapters: dict,
-    device:   str = "cpu",
-) -> Dict[str, float]:
-    """
-    Decode z back to the original input domain and measure MSE.
-    Expected targets:
-      video  < 0.05
-      audio  < 0.10
-      prosody < 0.02
-      text   < 0.05
-    """
-    mse_v, mse_a, mse_p, mse_t = [], [], [], []
-
-    for v_raw, a_raw, p_raw, t_raw in val_loader:
+    cfg: CAMELSConfig,
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Decode z back to input domain. Video < 0.10, prosody < 0.05."""
+    mse = {"video": [], "prosody": []}
+    for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
         v_raw = v_raw.to(device)
-        a_raw = a_raw.to(device)
         p_raw = p_raw.to(device)
-        t_raw = t_raw.to(device)
-
         with torch.no_grad():
-            mu_v, lv_v = adapters["video_adapter"].encode(v_raw)
-            z_v        = adapters["video_adapter"].reparameterize(mu_v, lv_v)
-            xh_v       = adapters["video_adapter"].decode(z_v)
-            mse_v.append(F.mse_loss(xh_v, v_raw).item())
+            if "video_adapter" in adapters:
+                mu_v, lv_v = adapters["video_adapter"].encode(v_raw)
+                z_v = adapters["video_adapter"].reparameterize(mu_v, lv_v)
+                xh_v = adapters["video_adapter"].decode(z_v)
+                mse["video"].append(F.mse_loss(xh_v, v_raw).item())
+            if "prosody_adapter" in adapters:
+                mu_p, lv_p = adapters["prosody_adapter"].encode(p_raw)
+                z_p = adapters["prosody_adapter"].reparameterize(mu_p, lv_p)
+                xh_p = adapters["prosody_adapter"].decode(z_p)
+                mse["prosody"].append(F.mse_loss(xh_p, p_raw).item())
 
-            mu_a, lv_a = adapters["audio_adapter"].encode(a_raw)
-            z_a        = adapters["audio_adapter"].reparameterize(mu_a, lv_a)
-            xh_a       = adapters["audio_adapter"].decode(z_a)
-            mse_a.append(F.mse_loss(xh_a, a_raw).item())
+    results = {}
+    for name, vals in mse.items():
+        if vals:
+            results[f"recon_mse_{name}"] = float(np.mean(vals))
+    return results
 
-            mu_p, lv_p = adapters["prosody_adapter"].encode(p_raw)
-            z_p        = adapters["prosody_adapter"].reparameterize(mu_p, lv_p)
-            xh_p       = adapters["prosody_adapter"].decode(z_p)
-            mse_p.append(F.mse_loss(xh_p, p_raw).item())
-
-            mu_t, lv_t = adapters["text_adapter"].encode(t_raw)
-            z_t        = adapters["text_adapter"].reparameterize(mu_t, lv_t)
-            xh_t       = adapters["text_adapter"].decode(z_t)
-            mse_t.append(F.mse_loss(xh_t, t_raw).item())
-
-    return {
-        "recon_mse_video":   float(np.mean(mse_v)),
-        "recon_mse_audio":   float(np.mean(mse_a)),
-        "recon_mse_prosody": float(np.mean(mse_p)),
-        "recon_mse_text":    float(np.mean(mse_t)),
-    }
-
-
-# ── KL per modality ───────────────────────────────────────────────────────────
 
 def eval_kl_per_modality(
     val_loader,
     adapters: dict,
-    device:   str = "cpu",
-) -> Dict[str, float]:
-    """Monitor KL divergence per modality — should be stable, not exploding."""
-    kl_v, kl_a, kl_p, kl_t = [], [], [], []
-
-    for v_raw, a_raw, p_raw, t_raw in val_loader:
-        v_raw = v_raw.to(device); a_raw = a_raw.to(device)
-        p_raw = p_raw.to(device); t_raw = t_raw.to(device)
-
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Monitor KL divergence per AVAE modality."""
+    kl = {"video": [], "prosody": []}
+    for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
+        v_raw = v_raw.to(device)
+        p_raw = p_raw.to(device)
         with torch.no_grad():
-            for raw, key, bucket in [
-                (v_raw, "video_adapter",   kl_v),
-                (a_raw, "audio_adapter",   kl_a),
-                (p_raw, "prosody_adapter", kl_p),
-                (t_raw, "text_adapter",    kl_t),
-            ]:
-                mu, lv = adapters[key].encode(raw)
-                kl     = -0.5 * torch.mean(1.0 + lv - mu.pow(2) - lv.exp())
-                bucket.append(kl.item())
-
-    return {
-        "kl_video":   float(np.mean(kl_v)),
-        "kl_audio":   float(np.mean(kl_a)),
-        "kl_prosody": float(np.mean(kl_p)),
-        "kl_text":    float(np.mean(kl_t)),
-    }
+            for raw, key, name in [(v_raw, "video_adapter", "video"), (p_raw, "prosody_adapter", "prosody")]:
+                if key in adapters:
+                    mu, lv = adapters[key].encode(raw)
+                    kl_val = -0.5 * torch.mean(1.0 + lv - mu.pow(2) - lv.exp())
+                    kl[name].append(kl_val.item())
+    return {f"kl_{name}": float(np.mean(vals)) for name, vals in kl.items() if vals}
 
 
-# ── Full evaluation suite ─────────────────────────────────────────────────────
+def eval_cross_modal_redundancy(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Cross-correlation norm between modality pairs. Target: mean < 5.0 after Stage B."""
+    names = sorted(z_dict.keys())
+    results = {}
+    for n1, n2 in combinations(names, 2):
+        z1 = z_dict[n1]
+        z2 = z_dict[n2]
+        z1c = F.normalize(z1 - z1.mean(0), dim=0)
+        z2c = F.normalize(z2 - z2.mean(0), dim=0)
+        C = torch.mm(z1c.T, z2c) / z1c.shape[0]
+        results[f"redundancy_{n1}_{n2}"] = C.norm().item()
+    results["redundancy_mean"] = float(np.mean([v for k, v in results.items() if k != "redundancy_mean"]))
+    return results
+
+
+def eval_dimension_utilization(
+    z_dict: dict[str, torch.Tensor],
+    d_latent: int,
+    threshold: float = 0.01,
+) -> dict[str, float]:
+    """Active dimensions per modality. Target: > 900."""
+    results = {}
+    for name, z in z_dict.items():
+        var = z.var(dim=0)
+        active = (var > threshold).sum().item()
+        results[f"active_dims_{name}"] = active
+        results[f"dim_util_{name}"] = active / d_latent
+    results["dim_util_mean"] = float(np.mean([v for k, v in results.items() if "dim_util_" in k and "mean" not in k]))
+    return results
+
+
+def eval_phoneme_probe_accuracy(
+    val_loader,
+    adapters: dict,
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Classification accuracy of PhonemeProbeHead on val set. Target: > 85%."""
+    if "phoneme_probe" not in adapters or "phoneme_adapter" not in adapters:
+        return {}
+
+    correct = 0
+    total = 0
+    for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
+        ph_raw = ph_raw.to(device)
+        ph_labels = ph_labels.to(device)
+        ph_mask = ph_mask.to(device)
+        with torch.no_grad():
+            z_ph = adapters["phoneme_adapter"](ph_raw)
+            logits = adapters["phoneme_probe"](z_ph)
+            preds = logits.argmax(dim=-1)
+            correct += (preds[ph_mask.bool()] == ph_labels[ph_mask.bool()]).sum().item()
+            total += ph_mask.bool().sum().item()
+
+    acc = correct / max(total, 1)
+    return {"phoneme_probe_accuracy": acc}
+
 
 def run_evaluation(
     val_loader,
-    adapters:     dict,
-    device:       str = "cpu",
-    stage:        str = "A",
-    y_train:      Optional[torch.Tensor] = None,
-    y_val:        Optional[torch.Tensor] = None,
-) -> Dict[str, float]:
-    """
-    Run the complete evaluation suite for a given training stage.
+    adapters: dict,
+    cfg: CAMELSConfig,
+    device: str = "cpu",
+    stage: str = "A",
+) -> dict[str, float]:
+    """Run the full evaluation suite for a given training stage."""
+    all_v, all_ph_pooled, all_p = [], [], []
 
-    Stage A: alignment + separation + retrieval + linear probe + margin + AUC
-    Stage B: all Stage A + reconstruction MSE + KL + uniformity
-    Stage C: all Stage B + (FM losses logged separately in train.py)
-
-    Returns: flat dict of {metric_name: value}.
-    """
-    # Collect full val set embeddings
-    all_v, all_a, all_p, all_t = [], [], [], []
-    all_v_raw, all_a_raw, all_p_raw, all_t_raw = [], [], [], []
-
-    for v_raw, a_raw, p_raw, t_raw in val_loader:
+    for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
         v_raw = v_raw.to(device)
-        a_raw = a_raw.to(device)
+        ph_raw = ph_raw.to(device)
+        ph_mask = ph_mask.to(device)
         p_raw = p_raw.to(device)
-        t_raw = t_raw.to(device)
+
         with torch.no_grad():
             z_v = adapters["video_adapter"].embed(v_raw)
-            z_a = adapters["audio_adapter"].embed(a_raw)
+            z_ph_seq = adapters["phoneme_adapter"](ph_raw)
+            z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)
             z_p = adapters["prosody_adapter"].embed(p_raw)
-            z_t = adapters["text_adapter"].embed(t_raw)
-        all_v.append(z_v.cpu()); all_a.append(z_a.cpu())
-        all_p.append(z_p.cpu()); all_t.append(z_t.cpu())
-        all_v_raw.append(v_raw.cpu())
 
-    z_v = torch.cat(all_v); z_a = torch.cat(all_a)
-    z_p = torch.cat(all_p); z_t = torch.cat(all_t)
+        all_v.append(z_v.cpu())
+        all_ph_pooled.append(z_ph_pooled.cpu())
+        all_p.append(z_p.cpu())
 
-    metrics = {}
+    z_v = torch.cat(all_v)
+    z_ph = torch.cat(all_ph_pooled)
+    z_p = torch.cat(all_p)
 
-    # Stage A metrics (always computed)
-    metrics.update(eval_intra_chunk_alignment(z_v, z_a, z_p, z_t))
-    metrics.update(eval_inter_chunk_separation(z_v, z_a, z_p, z_t))
-    metrics.update(eval_retrieval(z_v, z_a, z_p, z_t))
-    metrics.update(eval_cosine_margin(z_v, z_a, z_p, z_t))
-    metrics.update(eval_roc_auc(z_v, z_a, z_p, z_t))
+    z_dict = {"phoneme": z_ph, "prosody": z_p, "video": z_v}
 
-    if y_train is not None and y_val is not None:
-        z_train_all = torch.cat(all_v)   # use video embeddings for probe
-        for z_all, name in [(z_v, "video"), (z_a, "audio"), (z_p, "prosody"), (z_t, "text")]:
-            metrics.update(eval_linear_probe(z_all, y_val, z_all, y_val, name))
+    metrics: dict[str, float] = {}
+    metrics.update(eval_intra_chunk_alignment(z_dict))
+    metrics.update(eval_inter_chunk_separation(z_dict))
+    metrics.update(eval_retrieval(z_dict))
+    metrics.update(eval_cosine_margin(z_dict))
+    metrics.update(eval_roc_auc(z_dict))
+    metrics.update(eval_dimension_utilization(z_dict, cfg.latent.d_latent))
+    metrics.update(eval_phoneme_probe_accuracy(val_loader, adapters, device))
 
-    # Stage B+ metrics
     if stage in ("B", "C"):
-        metrics.update(eval_reconstruction_mse(val_loader, adapters, device))
+        metrics.update(eval_reconstruction_mse(val_loader, adapters, cfg, device))
         metrics.update(eval_kl_per_modality(val_loader, adapters, device))
-        metrics.update(eval_uniformity_all(z_v, z_a, z_p, z_t))
+        metrics.update(eval_uniformity_all(z_dict))
+        metrics.update(eval_cross_modal_redundancy(z_dict))
 
-    # Log a concise summary
     logger.info(
-        "[Stage %s] intra=%.3f  inter_v=%.3f  R@1(v->a)=%.3f  R@5(v->a)=%.3f",
+        "[Stage %s] intra=%.3f  R@1(v->ph)=%.3f",
         stage,
         metrics.get("intra_alignment_mean", 0.0),
-        metrics.get("inter_sep_v", 0.0),
-        metrics.get("R@1_video->audio", 0.0),
-        metrics.get("R@5_video->audio", 0.0),
+        metrics.get("R@1_video->phoneme", 0.0),
     )
     return metrics

@@ -1,1 +1,1 @@
-# CAMELS training package
+# encoding/training/__init__.py

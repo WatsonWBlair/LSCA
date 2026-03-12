@@ -1,298 +1,280 @@
-# training/train.py
-# Three-stage training protocol for CAMELS AVAE adapters.
-#   Stage A: InfoNCE only — aligns all 4 modalities in shared 1024-D space
-#   Stage B: + AVAE reconstruction + KL + z-consistency
-#   Stage C: + bidirectional flow matching (video ↔ audio)
-# Ref: SimCLR Chen et al. 2020; AvaeFlow Li et al. 2025; FM-Refiner 2025/26
+# encoding/training/train.py
+# Three-stage training protocol for CAMELS v8.1.
+#   Stage A: InfoNCE + L_var + L_cov + L_aux
+#   Stage B: + AVAE (capacity-controlled) + L_orth
+#   Stage C: + bidirectional FM (video <-> phoneme)
+# Dynamic loss assembly based on active modalities and current stage.
+
+from __future__ import annotations
 
 import json
 import logging
 import os
-from typing import Optional
 
 import torch
 import torch.optim as optim
 
-from src.encoding.utils.config  import D_LATENT
-from training.losses  import all_pairs_nce, all_avae_loss, bidirectional_fm_loss, monitor_nce_pairs
+from config import CAMELSConfig
+from adapters.registry import save_adapters
+from training.losses import (
+    all_pairs_nce, avae_loss, get_capacity,
+    cross_modal_orth_loss, variance_loss, covariance_loss,
+    bidirectional_fm_loss, phoneme_probe_loss, monitor_nce_pairs,
+)
 from training.evaluate import run_evaluation
 
 logger = logging.getLogger(__name__)
 
 
-# ── Hyperparameters ───────────────────────────────────────────────────────────
-
-DEFAULTS = dict(
-    lr              = 1e-4,
-    weight_decay    = 1e-4,
-    temperature     = 0.07,
-    kl_weight       = 1e-4,
-    sigma_min       = 1e-4,
-    stage_a_epochs  = 20,
-    stage_b_epochs  = 20,
-    stage_c_epochs  = 20,
-    eval_every      = 5,     # epochs between evaluation runs
-    checkpoint_dir  = "checkpoints",
-)
+def _get_z_dict(z_v, z_ph_pooled, z_p, cfg: CAMELSConfig) -> dict[str, torch.Tensor]:
+    """Build modality -> embedding dict for enabled modalities."""
+    z_dict = {}
+    if cfg.modality.video_enabled:
+        z_dict["video"] = z_v
+    if cfg.modality.phoneme_enabled:
+        z_dict["phoneme"] = z_ph_pooled
+    if cfg.modality.prosody_enabled:
+        z_dict["prosody"] = z_p
+    return z_dict
 
 
-# ── Stage A: Contrastive alignment ───────────────────────────────────────────
+def _forward_batch(batch, adapters, cfg, device, stage):
+    """Run forward pass for one batch. Returns all needed tensors."""
+    v_raw, ph_raw, ph_labels, ph_mask, p_raw = batch
+    v_raw = v_raw.to(device)
+    ph_raw = ph_raw.to(device)
+    ph_labels = ph_labels.to(device)
+    ph_mask = ph_mask.to(device)
+    p_raw = p_raw.to(device)
 
-def train_stage_a(
-    train_loader,
-    val_loader,
-    adapters:    dict,
-    device:      str  = "cpu",
-    epochs:      int  = 20,
-    lr:          float = 1e-4,
-    weight_decay: float = 1e-4,
-    temperature:  float = 0.07,
-    eval_every:   int  = 5,
-    checkpoint_dir: str = "checkpoints",
-) -> list:
-    """
-    Stage A — InfoNCE contrastive alignment only.
-    All 6 pairs active. mu only — no sampling, no decoder, no FM.
-    Goal: bring all 4 modalities into the same geometric neighbourhood.
-    This is the most important stage for HyperGNN handoff quality.
+    result = {"v_raw": v_raw, "ph_raw": ph_raw, "ph_labels": ph_labels, "ph_mask": ph_mask, "p_raw": p_raw}
 
-    Returns: list of per-epoch loss dicts.
-    """
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    history = []
+    # Video
+    if stage == "A":
+        z_v = adapters["video_adapter"].embed(v_raw)
+        result.update({"z_v": z_v})
+    else:
+        mu_v, lv_v, z_v, xh_v, zp_v = adapters["video_adapter"](v_raw)
+        result.update({"mu_v": mu_v, "lv_v": lv_v, "z_v": z_v, "xh_v": xh_v, "zp_v": zp_v})
 
-    # Trainable params: all 4 adapters + TemporalAttentionPool (no VelocityNets yet)
-    params = []
-    for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                "prosody_adapter", "text_adapter"]:
-        params += list(adapters[key].parameters())
-        adapters[key].to(device)
+    # Phoneme (always linear forward)
+    z_ph_seq = adapters["phoneme_adapter"](ph_raw)          # (B, MAX, d_latent)
+    z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)  # (B, d_latent)
+    result.update({"z_ph_seq": z_ph_seq, "z_ph_pooled": z_ph_pooled})
 
-    optimizer = optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+    # Prosody
+    if stage == "A":
+        z_p = adapters["prosody_adapter"].embed(p_raw)
+        result.update({"z_p": z_p})
+    else:
+        mu_p, lv_p, z_p, xh_p, zp_p = adapters["prosody_adapter"](p_raw)
+        result.update({"mu_p": mu_p, "lv_p": lv_p, "z_p": z_p, "xh_p": xh_p, "zp_p": zp_p})
 
-    for epoch in range(1, epochs + 1):
-        # ── Training ──────────────────────────────────────────────────────
-        for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                    "prosody_adapter", "text_adapter"]:
-            adapters[key].train()
-
-        epoch_loss = 0.0
-        n_batches  = 0
-
-        for v_raw, a_raw, p_raw, t_raw in train_loader:
-            v_raw = v_raw.to(device); a_raw = a_raw.to(device)
-            p_raw = p_raw.to(device); t_raw = t_raw.to(device)
-
-            z_v = adapters["video_adapter"].embed(v_raw)     # (B, 1024)
-            z_a = adapters["audio_adapter"].embed(a_raw)     # (B, 1024)
-            z_p = adapters["prosody_adapter"].embed(p_raw)   # (B, 1024)
-            z_t = adapters["text_adapter"].embed(t_raw)      # (B, 1024)
-
-            loss = all_pairs_nce(z_v, z_a, z_p, z_t, temperature=temperature)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            n_batches  += 1
-
-        avg_loss = epoch_loss / max(n_batches, 1)
-        history.append({"stage": "A", "epoch": epoch, "loss": avg_loss})
-        logger.info("Stage A | Epoch %3d/%d | loss=%.4f", epoch, epochs, avg_loss)
-
-        # ── Evaluation ────────────────────────────────────────────────────
-        if epoch % eval_every == 0 or epoch == epochs:
-            for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                        "prosody_adapter", "text_adapter"]:
-                adapters[key].eval()
-
-            # Per-pair InfoNCE monitoring
-            _log_pair_losses(train_loader, adapters, device, temperature, epoch, "A")
-
-            metrics = run_evaluation(val_loader, adapters, device=device, stage="A")
-            history[-1]["eval"] = metrics
-
-            # Checkpoint
-            _save_checkpoint(adapters, checkpoint_dir, "stage_a", epoch)
-
-    return history
+    return result
 
 
-# ── Stage B: + AVAE ───────────────────────────────────────────────────────────
+def _compute_losses(fwd, adapters, cfg, stage, epoch, stage_b_start, stage_b_end):
+    """Compute all active losses for the current stage. Returns (total, losses_dict)."""
+    tc = cfg.training
+    losses = {}
 
-def train_stage_b(
-    train_loader,
-    val_loader,
-    adapters:    dict,
-    device:      str   = "cpu",
-    epochs:      int   = 20,
-    lr:          float = 1e-4,
-    weight_decay: float = 1e-4,
-    temperature:  float = 0.07,
-    kl_weight:   float = 1e-4,
-    eval_every:  int   = 5,
-    checkpoint_dir: str = "checkpoints",
-) -> list:
-    """
-    Stage B — InfoNCE + AVAE (reconstruction + KL + z-consistency).
-    Adds the decoder and reencoder to the training graph.
-    Reconstruction targets:
-      video   → MARLIN embedding space  (target MSE < 0.05)
-      audio   → wav2vec2 space           (target MSE < 0.10)
-      prosody → normalized prosody       (target MSE < 0.02)
-      text    → SONAR space              (target MSE < 0.05)
-    """
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    history = []
+    # InfoNCE — always active
+    z_v_for_nce = fwd.get("mu_v", fwd.get("z_v"))
+    z_p_for_nce = fwd.get("mu_p", fwd.get("z_p"))
+    z_dict = _get_z_dict(z_v_for_nce, fwd["z_ph_pooled"], z_p_for_nce, cfg)
+    l_nce, nce_pairs = all_pairs_nce(z_dict, temperature=tc.temperature)
+    losses["nce"] = l_nce
+    losses.update(nce_pairs)
 
-    params = []
-    for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                "prosody_adapter", "text_adapter"]:
-        params += list(adapters[key].parameters())
-        adapters[key].to(device)
+    # L_var + L_cov — Stage A+
+    z_list = list(z_dict.values())
+    losses["var"] = variance_loss(z_list, gamma=tc.gamma_var)
+    losses["cov"] = covariance_loss(z_list)
 
-    optimizer = optim.AdamW(params, lr=lr, weight_decay=weight_decay)
-
-    for epoch in range(1, epochs + 1):
-        for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                    "prosody_adapter", "text_adapter"]:
-            adapters[key].train()
-
-        epoch_nce  = 0.0
-        epoch_avae = 0.0
-        n_batches  = 0
-
-        for v_raw, a_raw, p_raw, t_raw in train_loader:
-            v_raw = v_raw.to(device); a_raw = a_raw.to(device)
-            p_raw = p_raw.to(device); t_raw = t_raw.to(device)
-
-            mu_v, lv_v, z_v, xh_v, zp_v = adapters["video_adapter"](v_raw)
-            mu_a, lv_a, z_a, xh_a, zp_a = adapters["audio_adapter"](a_raw)
-            mu_p, lv_p, z_p, xh_p, zp_p = adapters["prosody_adapter"](p_raw)
-            mu_t, lv_t, z_t, xh_t, zp_t = adapters["text_adapter"](t_raw)
-
-            l_nce  = all_pairs_nce(mu_v, mu_a, mu_p, mu_t, temperature=temperature)
-            l_avae = all_avae_loss(
-                v_raw, xh_v, mu_v, lv_v, z_v, zp_v,
-                a_raw, xh_a, mu_a, lv_a, z_a, zp_a,
-                p_raw, xh_p, mu_p, lv_p, z_p, zp_p,
-                t_raw, xh_t, mu_t, lv_t, z_t, zp_t,
-                kl_weight=kl_weight,
-            )
-            loss = l_nce + l_avae
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            epoch_nce  += l_nce.item()
-            epoch_avae += l_avae.item()
-            n_batches  += 1
-
-        avg_nce  = epoch_nce  / max(n_batches, 1)
-        avg_avae = epoch_avae / max(n_batches, 1)
-        history.append({
-            "stage": "B", "epoch": epoch,
-            "loss_nce": avg_nce, "loss_avae": avg_avae,
-            "loss_total": avg_nce + avg_avae,
-        })
-        logger.info(
-            "Stage B | Epoch %3d/%d | nce=%.4f  avae=%.4f",
-            epoch, epochs, avg_nce, avg_avae,
+    # L_aux (phoneme probe) — Stage A+
+    if "phoneme_probe" in adapters:
+        losses["aux"] = phoneme_probe_loss(
+            fwd["z_ph_seq"], fwd["ph_labels"], fwd["ph_mask"], adapters["phoneme_probe"],
         )
+    else:
+        losses["aux"] = torch.tensor(0.0, device=l_nce.device)
 
-        if epoch % eval_every == 0 or epoch == epochs:
-            for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                        "prosody_adapter", "text_adapter"]:
+    total = l_nce + tc.lambda_var * losses["var"] + tc.lambda_cov * losses["cov"] + tc.lambda_aux * losses["aux"]
+
+    # Stage B+: AVAE + L_orth
+    if stage in ("B", "C"):
+        # Video AVAE
+        C_v = get_capacity(epoch, stage_b_start, stage_b_end, tc.c_max_video)
+        v_avae = avae_loss(fwd["v_raw"], fwd["xh_v"], fwd["mu_v"], fwd["lv_v"], fwd["z_v"], fwd["zp_v"], C_v, tc.beta_cap)
+        for k, v in v_avae.items():
+            losses[f"avae_video_{k}"] = v
+
+        # Prosody AVAE
+        C_p = get_capacity(epoch, stage_b_start, stage_b_end, tc.c_max_prosody)
+        p_avae = avae_loss(fwd["p_raw"], fwd["xh_p"], fwd["mu_p"], fwd["lv_p"], fwd["z_p"], fwd["zp_p"], C_p, tc.beta_cap)
+        for k, v in p_avae.items():
+            losses[f"avae_prosody_{k}"] = v
+
+        l_avae = v_avae["total"] + p_avae["total"]
+        losses["avae_total"] = l_avae
+
+        # L_orth
+        losses["orth"] = cross_modal_orth_loss(z_list)
+
+        total = total + l_avae + tc.lambda_orth * losses["orth"]
+
+    return total, losses
+
+
+def train_stage_a(train_loader, val_loader, adapters, cfg, device="cpu"):
+    """Stage A: contrastive alignment + geometric regularization."""
+    tc = cfg.training
+    os.makedirs(tc.checkpoint_dir, exist_ok=True)
+    history = []
+
+    # Trainable: adapters + temporal_pool + phoneme components (NO velocity)
+    params = []
+    train_keys = [k for k in adapters if "velocity" not in k]
+    for key in train_keys:
+        adapters[key].to(device)
+        params.extend(adapters[key].parameters())
+
+    optimizer = optim.AdamW(params, lr=tc.lr, weight_decay=tc.weight_decay)
+
+    for epoch in range(1, tc.stage_a_epochs + 1):
+        for key in train_keys:
+            adapters[key].train()
+
+        epoch_losses = {}
+        n_batches = 0
+
+        for batch in train_loader:
+            fwd = _forward_batch(batch, adapters, cfg, device, "A")
+            total, losses = _compute_losses(fwd, adapters, cfg, "A", epoch, 0, 0)
+
+            optimizer.zero_grad()
+            total.backward()
+            optimizer.step()
+
+            for k, v in losses.items():
+                epoch_losses[k] = epoch_losses.get(k, 0.0) + (v.item() if torch.is_tensor(v) else v)
+            n_batches += 1
+
+        avg = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
+        history.append({"stage": "A", "epoch": epoch, **avg})
+        logger.info("Stage A | Epoch %3d/%d | nce=%.4f var=%.4f cov=%.4f aux=%.4f",
+                     epoch, tc.stage_a_epochs, avg.get("nce", 0), avg.get("var", 0), avg.get("cov", 0), avg.get("aux", 0))
+
+        if epoch % tc.eval_every == 0 or epoch == tc.stage_a_epochs:
+            for key in train_keys:
                 adapters[key].eval()
-
-            metrics = run_evaluation(val_loader, adapters, device=device, stage="B")
+            metrics = run_evaluation(val_loader, adapters, cfg, device=device, stage="A")
             history[-1]["eval"] = metrics
-            _save_checkpoint(adapters, checkpoint_dir, "stage_b", epoch)
+            save_adapters(adapters, os.path.join(tc.checkpoint_dir, f"stage_a_epoch{epoch:03d}.pt"))
 
     return history
 
 
-# ── Stage C: + Bidirectional Flow Matching ────────────────────────────────────
+def train_stage_b(train_loader, val_loader, adapters, cfg, device="cpu"):
+    """Stage B: + AVAE reconstruction + L_orth + capacity control."""
+    tc = cfg.training
+    os.makedirs(tc.checkpoint_dir, exist_ok=True)
+    history = []
 
-def train_stage_c(
-    train_loader,
-    val_loader,
-    adapters:    dict,
-    device:      str   = "cpu",
-    epochs:      int   = 20,
-    lr:          float = 1e-4,
-    weight_decay: float = 1e-4,
-    temperature:  float = 0.07,
-    kl_weight:   float = 1e-4,
-    sigma_min:   float = 1e-4,
-    eval_every:  int   = 5,
-    checkpoint_dir: str = "checkpoints",
-) -> list:
-    """
-    Stage C — InfoNCE + AVAE + bidirectional flow matching (video ↔ audio).
-    CRITICAL: adapter gradients are DETACHED before FM loss.
-    Only VelocityNets receive FM gradients — adapters are not updated by FM.
-    """
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    params = []
+    train_keys = [k for k in adapters if "velocity" not in k]
+    for key in train_keys:
+        adapters[key].to(device)
+        params.extend(adapters[key].parameters())
+
+    optimizer = optim.AdamW(params, lr=tc.lr, weight_decay=tc.weight_decay)
+    stage_b_start = 1
+    stage_b_end = tc.stage_b_epochs
+
+    for epoch in range(1, tc.stage_b_epochs + 1):
+        for key in train_keys:
+            adapters[key].train()
+
+        epoch_losses = {}
+        n_batches = 0
+
+        for batch in train_loader:
+            fwd = _forward_batch(batch, adapters, cfg, device, "B")
+            total, losses = _compute_losses(fwd, adapters, cfg, "B", epoch, stage_b_start, stage_b_end)
+
+            optimizer.zero_grad()
+            total.backward()
+            optimizer.step()
+
+            for k, v in losses.items():
+                epoch_losses[k] = epoch_losses.get(k, 0.0) + (v.item() if torch.is_tensor(v) else v)
+            n_batches += 1
+
+        avg = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
+        history.append({"stage": "B", "epoch": epoch, **avg})
+        logger.info("Stage B | Epoch %3d/%d | nce=%.4f avae=%.4f orth=%.4f",
+                     epoch, tc.stage_b_epochs, avg.get("nce", 0), avg.get("avae_total", 0), avg.get("orth", 0))
+
+        if epoch % tc.eval_every == 0 or epoch == tc.stage_b_epochs:
+            for key in train_keys:
+                adapters[key].eval()
+            metrics = run_evaluation(val_loader, adapters, cfg, device=device, stage="B")
+            history[-1]["eval"] = metrics
+            save_adapters(adapters, os.path.join(tc.checkpoint_dir, f"stage_b_epoch{epoch:03d}.pt"))
+
+    return history
+
+
+def train_stage_c(train_loader, val_loader, adapters, cfg, device="cpu"):
+    """Stage C: + bidirectional flow matching (video <-> phoneme)."""
+    tc = cfg.training
+    os.makedirs(tc.checkpoint_dir, exist_ok=True)
     history = []
 
     # Adapter params (same as Stage B)
+    adapter_keys = [k for k in adapters if "velocity" not in k]
     adapter_params = []
-    for key in ["temporal_pool", "video_adapter", "audio_adapter",
-                "prosody_adapter", "text_adapter"]:
-        adapter_params += list(adapters[key].parameters())
+    for key in adapter_keys:
         adapters[key].to(device)
+        adapter_params.extend(adapters[key].parameters())
 
-    # VelocityNet params (separate optimizer so FM doesn't touch adapters)
-    vel_params = (
-        list(adapters["velocity_va"].parameters()) +
-        list(adapters["velocity_av"].parameters())
-    )
-    adapters["velocity_va"].to(device)
-    adapters["velocity_av"].to(device)
+    # VelocityNet params (separate optimizer)
+    vel_keys = [k for k in adapters if "velocity" in k]
+    vel_params = []
+    for key in vel_keys:
+        adapters[key].to(device)
+        vel_params.extend(adapters[key].parameters())
 
-    opt_adapters  = optim.AdamW(adapter_params, lr=lr, weight_decay=weight_decay)
-    opt_velocity  = optim.AdamW(vel_params,     lr=lr, weight_decay=weight_decay)
+    opt_adapters = optim.AdamW(adapter_params, lr=tc.lr, weight_decay=tc.weight_decay)
+    opt_velocity = optim.AdamW(vel_params, lr=tc.lr, weight_decay=tc.weight_decay)
 
-    for epoch in range(1, epochs + 1):
+    stage_b_start = 1
+    stage_b_end = tc.stage_b_epochs  # capacity continues from B schedule
+
+    for epoch in range(1, tc.stage_c_epochs + 1):
         for key in adapters:
             adapters[key].train()
 
-        epoch_nce  = 0.0
-        epoch_avae = 0.0
-        epoch_fm   = 0.0
-        n_batches  = 0
+        epoch_losses = {}
+        n_batches = 0
 
-        for v_raw, a_raw, p_raw, t_raw in train_loader:
-            v_raw = v_raw.to(device); a_raw = a_raw.to(device)
-            p_raw = p_raw.to(device); t_raw = t_raw.to(device)
+        for batch in train_loader:
+            fwd = _forward_batch(batch, adapters, cfg, device, "C")
+            total, losses = _compute_losses(fwd, adapters, cfg, "B", epoch + tc.stage_b_epochs, stage_b_start, stage_b_end)
 
-            mu_v, lv_v, z_v, xh_v, zp_v = adapters["video_adapter"](v_raw)
-            mu_a, lv_a, z_a, xh_a, zp_a = adapters["audio_adapter"](a_raw)
-            mu_p, lv_p, z_p, xh_p, zp_p = adapters["prosody_adapter"](p_raw)
-            mu_t, lv_t, z_t, xh_t, zp_t = adapters["text_adapter"](t_raw)
-
-            l_nce  = all_pairs_nce(mu_v, mu_a, mu_p, mu_t, temperature=temperature)
-            l_avae = all_avae_loss(
-                v_raw, xh_v, mu_v, lv_v, z_v, zp_v,
-                a_raw, xh_a, mu_a, lv_a, z_a, zp_a,
-                p_raw, xh_p, mu_p, lv_p, z_p, zp_p,
-                t_raw, xh_t, mu_t, lv_t, z_t, zp_t,
-                kl_weight=kl_weight,
-            )
-
-            # FM loss: adapters detached — only VelocityNets updated
+            # FM loss (adapters detached)
             l_fm = bidirectional_fm_loss(
-                mu_v, mu_a,
-                adapters["velocity_va"], adapters["velocity_av"],
-                sigma_min=sigma_min,
+                fwd.get("mu_v", fwd["z_v"]),
+                fwd["z_ph_pooled"],
+                adapters["velocity_vph"],
+                adapters["velocity_phv"],
+                sigma_min=tc.sigma_min,
             )
+            losses["fm"] = l_fm
 
-            # Update adapters with NCE + AVAE
+            # Update adapters with NCE + AVAE + geometric losses
             opt_adapters.zero_grad()
-            (l_nce + l_avae).backward(retain_graph=True)
+            total.backward(retain_graph=True)
             opt_adapters.step()
 
             # Update VelocityNets with FM only
@@ -300,116 +282,46 @@ def train_stage_c(
             l_fm.backward()
             opt_velocity.step()
 
-            epoch_nce  += l_nce.item()
-            epoch_avae += l_avae.item()
-            epoch_fm   += l_fm.item()
-            n_batches  += 1
+            for k, v in losses.items():
+                epoch_losses[k] = epoch_losses.get(k, 0.0) + (v.item() if torch.is_tensor(v) else v)
+            n_batches += 1
 
-        avg_nce  = epoch_nce  / max(n_batches, 1)
-        avg_avae = epoch_avae / max(n_batches, 1)
-        avg_fm   = epoch_fm   / max(n_batches, 1)
-        history.append({
-            "stage": "C", "epoch": epoch,
-            "loss_nce": avg_nce, "loss_avae": avg_avae, "loss_fm": avg_fm,
-            "loss_total": avg_nce + avg_avae + avg_fm,
-        })
-        logger.info(
-            "Stage C | Epoch %3d/%d | nce=%.4f  avae=%.4f  fm=%.4f",
-            epoch, epochs, avg_nce, avg_avae, avg_fm,
-        )
+        avg = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
+        history.append({"stage": "C", "epoch": epoch, **avg})
+        logger.info("Stage C | Epoch %3d/%d | nce=%.4f avae=%.4f fm=%.4f",
+                     epoch, tc.stage_c_epochs, avg.get("nce", 0), avg.get("avae_total", 0), avg.get("fm", 0))
 
-        if epoch % eval_every == 0 or epoch == epochs:
+        if epoch % tc.eval_every == 0 or epoch == tc.stage_c_epochs:
             for key in adapters:
                 adapters[key].eval()
-            metrics = run_evaluation(val_loader, adapters, device=device, stage="C")
+            metrics = run_evaluation(val_loader, adapters, cfg, device=device, stage="C")
             history[-1]["eval"] = metrics
-            _save_checkpoint(adapters, checkpoint_dir, "stage_c", epoch)
+            save_adapters(adapters, os.path.join(tc.checkpoint_dir, f"stage_c_epoch{epoch:03d}.pt"))
 
     return history
 
-
-# ── Full training run (A → B → C) ────────────────────────────────────────────
 
 def train_all_stages(
     train_loader,
     val_loader,
-    adapters:      dict,
-    device:        str = "cpu",
-    hparams:       dict = None,
-    checkpoint_dir: str = "checkpoints",
-    history_path:  str = "training_history.json",
+    adapters: dict,
+    cfg: CAMELSConfig,
+    device: str = "cpu",
+    history_path: str = "training_history.json",
 ) -> dict:
-    """
-    Run the complete 3-stage training protocol.
-    Saves history to history_path as JSON for inspection.
-    Returns combined history dict.
-    """
-    hp = {**DEFAULTS, **(hparams or {})}
-
+    """Run the complete 3-stage training protocol."""
     logger.info("=" * 60)
-    logger.info("CAMELS Training — device=%s", device)
-    logger.info("Stage A: %d epochs | Stage B: %d epochs | Stage C: %d epochs",
-                hp["stage_a_epochs"], hp["stage_b_epochs"], hp["stage_c_epochs"])
+    logger.info("CAMELS v8.1 Training — device=%s, d_latent=%d", device, cfg.latent.d_latent)
+    logger.info("Stage A: %d | B: %d | C: %d epochs",
+                cfg.training.stage_a_epochs, cfg.training.stage_b_epochs, cfg.training.stage_c_epochs)
     logger.info("=" * 60)
 
-    hist_a = train_stage_a(
-        train_loader, val_loader, adapters, device=device,
-        epochs=hp["stage_a_epochs"], lr=hp["lr"],
-        weight_decay=hp["weight_decay"], temperature=hp["temperature"],
-        eval_every=hp["eval_every"], checkpoint_dir=checkpoint_dir,
-    )
-    hist_b = train_stage_b(
-        train_loader, val_loader, adapters, device=device,
-        epochs=hp["stage_b_epochs"], lr=hp["lr"],
-        weight_decay=hp["weight_decay"], temperature=hp["temperature"],
-        kl_weight=hp["kl_weight"], eval_every=hp["eval_every"],
-        checkpoint_dir=checkpoint_dir,
-    )
-    hist_c = train_stage_c(
-        train_loader, val_loader, adapters, device=device,
-        epochs=hp["stage_c_epochs"], lr=hp["lr"],
-        weight_decay=hp["weight_decay"], temperature=hp["temperature"],
-        kl_weight=hp["kl_weight"], sigma_min=hp["sigma_min"],
-        eval_every=hp["eval_every"], checkpoint_dir=checkpoint_dir,
-    )
+    hist_a = train_stage_a(train_loader, val_loader, adapters, cfg, device)
+    hist_b = train_stage_b(train_loader, val_loader, adapters, cfg, device)
+    hist_c = train_stage_c(train_loader, val_loader, adapters, cfg, device)
 
     history = {"A": hist_a, "B": hist_b, "C": hist_c}
     with open(history_path, "w") as f:
-        json.dump(history, f, indent=2, default=_json_default)
+        json.dump(history, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
     logger.info("Training complete. History saved to %s", history_path)
     return history
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _log_pair_losses(loader, adapters, device, temperature, epoch, stage):
-    """Log per-pair InfoNCE on first batch (fast diagnostic)."""
-    try:
-        v_raw, a_raw, p_raw, t_raw = next(iter(loader))
-        v_raw = v_raw.to(device); a_raw = a_raw.to(device)
-        p_raw = p_raw.to(device); t_raw = t_raw.to(device)
-        with torch.no_grad():
-            z_v = adapters["video_adapter"].embed(v_raw)
-            z_a = adapters["audio_adapter"].embed(a_raw)
-            z_p = adapters["prosody_adapter"].embed(p_raw)
-            z_t = adapters["text_adapter"].embed(t_raw)
-        pairs = monitor_nce_pairs(z_v, z_a, z_p, z_t, temperature)
-        parts = "  ".join(f"{k}={v:.3f}" for k, v in pairs.items())
-        logger.info("Stage %s | Epoch %d | pair losses: %s", stage, epoch, parts)
-    except Exception as e:
-        logger.warning("_log_pair_losses failed: %s", e)
-
-
-def _save_checkpoint(adapters, checkpoint_dir, stage_name, epoch):
-    from src.encoding.adapters import save_adapters
-    path = os.path.join(checkpoint_dir, f"{stage_name}_epoch{epoch:03d}.pt")
-    save_adapters(adapters, path)
-    logger.info("Checkpoint saved: %s", path)
-
-
-def _json_default(obj):
-    """JSON serializer for non-serializable types (e.g., numpy floats)."""
-    try:
-        return float(obj)
-    except (TypeError, ValueError):
-        return str(obj)
