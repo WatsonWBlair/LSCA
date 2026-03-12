@@ -32,9 +32,11 @@ See [QUICKSTART.md](QUICKSTART.md) for full setup instructions including the `se
 # Seamless Interaction dataset
 invoke wrangle-seamless --count N
 
-# CANDOR Corpus (download first, then process)
-invoke download-candor --count N
-invoke wrangle-candor --count N
+# CANDOR Corpus (download, extract, and wrangle in one step)
+invoke wrangle-candor
+
+# CANDOR Corpus (backfill already-downloaded parts)
+invoke wrangle-candor-to-wrangled
 ```
 
 See [DATA_WRANGLING.md](DATA_WRANGLING.md) for dataset details and output structures.
@@ -56,6 +58,7 @@ src/data_wrangling/         # Dataset preprocessing
   candor/                   # Download + extract + wrangle utilities
 scripts/
   preprocess_data.py        # Offline feature extraction
+  generate_wrangled_tokens.py  # Pregenerate backbone tokens from wrangled data
   train_adapters.py         # 3-stage training entry point
 run_pipeline.py             # Live streaming entry point
 tests/                      # Full pytest test suite
@@ -71,8 +74,8 @@ invoke lint                          # Run ruff linter
 invoke install                       # Update conda environment
 
 # Training
-python scripts/preprocess_data.py --data-root datasets/ --output-dir outputs/features
-python scripts/train_adapters.py --feature-dir outputs/features --checkpoint-dir checkpoints/
+invoke generate-wrangled-tokens
+python scripts/train_adapters.py --feature-dir datasets/pregenerated/ --checkpoint-dir checkpoints/
 
 # Live streaming
 python run_pipeline.py --checkpoint checkpoints/stage_c_epoch020.pt --camera 0

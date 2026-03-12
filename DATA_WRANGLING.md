@@ -70,7 +70,7 @@ Participants in the same interaction share session and interaction IDs, enabling
 invoke wrangle-candor
 ```
 
-Two-step workflow: first download zips with `invoke download-candor`, then extract and process with `invoke wrangle-candor`. Both commands support resume via marker files.
+Downloads, extracts, and wrangles parts directly into `datasets/wrangled/`. Supports resume via marker files.
 
 **Options:**
 - `--start N` — Part number to start from (default: 1)
@@ -78,21 +78,36 @@ Two-step workflow: first download zips with `invoke download-candor`, then extra
 
 **Dataset size:** 166 zip files (~5GB each, ~850GB total raw). After wrangling: ~280GB.
 
+To backfill already-downloaded parts (e.g., from a prior `invoke download-candor` run):
+
+```bash
+invoke wrangle-candor-to-wrangled
+```
+
 ### Output Structure
 
 ```
-datasets/candor/
-  {conversation-uuid}/
-    processed/
-      {user-id}.mp4   # Per-participant video (cropped)
-      {user-id}.wav   # Per-participant audio (16kHz mono)
-    transcription/
-    metadata.json
-    survey.csv
-    audio_video_features.csv
+datasets/wrangled/
+  C{part_num}/
+    {uuid}_{user_id}.mp4    # Per-participant video
+    {uuid}_{user_id}.wav    # Per-participant audio (16kHz mono)
+    {uuid}_{user_id}.json   # Metadata (VAD, transcript, survey, audio/video features)
 ```
 
+> **JSON schema:** `id` (conversation UUID), `metadata.vad`, `metadata.transcript`,
+> `metadata.survey`, `metadata.audio_video_features`
+
 Storage: ~170MB per conversation.
+
+### Token Pre-generation
+
+After wrangling, pregenerate backbone tokens for efficient training:
+
+```bash
+invoke generate-wrangled-tokens
+```
+
+Runs all wrangled files through the frozen encoders and saves outputs to `datasets/pregenerated/`.
 
 ### Utility Commands
 
@@ -100,3 +115,4 @@ For debugging or archival workflows:
 - `invoke download-candor` — Download zips without processing
 - `invoke download-candor --extract` — Download and extract zips
 - `invoke extract-candor` — Extract audio from already-extracted MKVs
+- `invoke wrangle-candor-to-wrangled` — Process already-downloaded parts into `datasets/wrangled/`

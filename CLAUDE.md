@@ -27,7 +27,9 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 | Command | Description |
 |---------|-------------|
 | `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
-| `invoke wrangle-candor` | Process CANDOR dataset iteratively |
+| `invoke wrangle-candor` | Download, extract, and wrangle CANDOR parts into datasets/wrangled/ |
+| `invoke wrangle-candor-to-wrangled` | Backfill already-downloaded CANDOR parts into datasets/wrangled/ |
+| `invoke generate-wrangled-tokens` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
 
 Run tests: `pytest tests/ -v` or `pytest tests/test_config.py::test_default_config`
 
@@ -99,11 +101,13 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 |------|---------|
 | `run_pipeline.py` | Live streaming pipeline |
 | `scripts/preprocess_data.py` | Extract raw features for training |
+| `scripts/generate_wrangled_tokens.py` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
 | `scripts/train_adapters.py` | Run 3-stage training protocol |
 
 ### Other Directories
 
 - `src/data_wrangling/` — Video preprocessing pipeline (Seamless + CANDOR)
+  - `candor/wrangle.py` — Extracts per-participant `.mp4`, `.wav`, and `.json` into `datasets/wrangled/C{part_num}/`
 - `tests/` — Full pytest test suite
 
 ## Critical Design Rules

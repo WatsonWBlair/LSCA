@@ -70,6 +70,15 @@ def wrangle_candor_task(c, start=1, count=None):
     print(f"Wrangled {processed} part(s)")
 
 
+@task(name="wrangle-candor-to-wrangled")
+def wrangle_candor_to_wrangled_task(c):
+    """Wrangle already-processed CANDOR data into datasets/wrangled/."""
+    from src.data_wrangling.candor.wrangle import wrangle_all_candor
+
+    total = wrangle_all_candor(CANDOR_DIR, Path("datasets/wrangled"))
+    print(f"Wrangled {total} user(s) total")
+
+
 @task(name="generate-tokens")
 def generate_tokens_task(c, data_root="datasets/", output_dir="outputs/features", device="cpu"):
     """Pre-generate backbone tokens from wrangled conversations for adapter training."""

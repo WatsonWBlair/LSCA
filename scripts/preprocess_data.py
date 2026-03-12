@@ -58,6 +58,7 @@ def main():
 
     from encoding.config import CAMELSConfig, LatentConfig
     from encoding.models.loader import load_all_models
+    from encoding.adapters.registry import build_adapters
     from encoding.pipelines.video import extract_video_file
     from encoding.pipelines.phoneme import phoneme_pipeline, pad_phonemes
     from encoding.pipelines.prosody import extract_prosody_raw, fit_prosody_stats, z_score
@@ -113,9 +114,11 @@ def main():
     v_rows = []
     logger.info("Extracting video features ...")
     marlin_model = models.get("marlin")
+    adapters = build_adapters(cfg)
+    temporal_pool = adapters["temporal_pool"]
     for i, mp4_path in enumerate(mp4_files):
         try:
-            z_v = extract_video_file(str(mp4_path), marlin_model, cfg, device=args.device)
+            z_v = extract_video_file(str(mp4_path), marlin_model, temporal_pool, cfg)
             v_rows.append(z_v.detach().cpu().numpy())
             if (i + 1) % 10 == 0:
                 logger.info("  Video: %d/%d", i + 1, len(mp4_files))

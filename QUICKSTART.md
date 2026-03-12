@@ -60,30 +60,36 @@ Each pair is downloaded, cropped to webcam framing, and cleaned up before the ne
 ### CANDOR Corpus
 
 ```bash
-# Download zips first (requires pre-signed URLs in src/data_wrangling/candor/file_urls.txt)
-invoke download-candor --count 5
-
-# Then extract and process the downloaded zips
+# Download, extract, and wrangle in one step
 invoke wrangle-candor --count 5
+
+# Or, if zips are already downloaded, backfill directly into wrangled output
+invoke wrangle-candor-to-wrangled --count 5
 ```
+
+## 5. Pre-generate Tokens
+
+After wrangling, run the frozen encoders once over all wrangled data to produce cached tokens for fast training:
+
+```bash
+invoke generate-wrangled-tokens
+```
+
+Outputs are saved to `datasets/pregenerated/`.
 
 ## Output Structure
 
 ```
-datasets/wrangled/              # Seamless Interaction output
-  S{session}/
+datasets/wrangled/
+  S{session}/                         # Seamless Interaction output
     I{interaction}_P{participant}.mp4
     I{interaction}_P{participant}.wav
     I{interaction}_P{participant}.json
     I{interaction}_P{participant}.npz
-
-datasets/candor/                # CANDOR output
-  {conversation-uuid}/
-    processed/
-      {user-id}.mp4
-      {user-id}.wav
-    metadata.json
-    ...
+  C{part_num}/                        # CANDOR output
+    {uuid}_{user_id}.mp4
+    {uuid}_{user_id}.wav
+    {uuid}_{user_id}.json             # VAD, transcript, survey, audio/video features
 ```
 
 ## Common Commands
@@ -92,7 +98,9 @@ datasets/candor/                # CANDOR output
 |---------|-------------|
 | `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
 | `invoke download-candor` | Download CANDOR zips (requires file_urls.txt) |
-| `invoke wrangle-candor` | Extract and process downloaded CANDOR zips |
+| `invoke wrangle-candor` | Download, extract, and wrangle CANDOR parts |
+| `invoke wrangle-candor-to-wrangled` | Backfill already-downloaded CANDOR parts into wrangled output |
+| `invoke generate-wrangled-tokens` | Pregenerate backbone tokens from datasets/wrangled/ |
 | `invoke test` | Run pytest tests |
 | `invoke lint` | Run ruff linter |
 
@@ -104,5 +112,5 @@ The `seamless_interaction` library must be installed from source (not pip) to in
 **FFmpeg not found:**
 Ensure the `lsca` conda environment is activated. FFmpeg is installed via conda.
 
-**Video processing fails:**
-Check that both `.mp4` and `.npz` files exist for each interaction.
+**Video processing fails (Seamless Interaction):**
+Check that both `.mp4` and `.npz` files exist for each interaction. CANDOR wrangled output uses `.mp4` + `.json` (no `.npz`).

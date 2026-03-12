@@ -68,8 +68,8 @@ def make_backbone_tag(cfg) -> str:
 def discover_triplets(
     wrangled_root: str, max_pairs: int | None
 ) -> list[tuple[Path, Path, Path]]:
-    """Find all (mp4, wav, json) triplets under wrangled_root/S*/."""
-    session_dirs = sorted(Path(wrangled_root).glob("S*/"))
+    """Find all (mp4, wav, json) triplets under wrangled_root/*/."""
+    session_dirs = sorted(d for d in Path(wrangled_root).iterdir() if d.is_dir())
     triplets = []
     skipped = 0
 

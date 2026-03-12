@@ -169,6 +169,11 @@ def process_part(zip_path: Path, output_dir: Path) -> bool:
         # Remove extra files (combined video/audio, thumbnail, etc.)
         cleanup_extras(conv_dir)
 
+        # Wrangle into datasets/wrangled/
+        from src.data_wrangling.candor.wrangle import wrangle_conversation
+        part_num = zip_path.stem.split("_")[-1]  # 'raw_media_part_004' -> '004'
+        wrangle_conversation(conv_dir, part_num, Path("datasets/wrangled"))
+
         # Remove raw/ directory
         shutil.rmtree(raw_dir)
         logger.info(f"Removed {raw_dir}")
