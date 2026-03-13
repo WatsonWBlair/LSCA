@@ -69,8 +69,5 @@ Thumbs.db
 htmlcov/
 .coverage
 
-# Seamless Interaction library (install separately — see QUICKSTART.md)
-seamless_interaction/
-
 # Pre-signed S3 URLs (contain temporary credentials)
 file_urls.txt
