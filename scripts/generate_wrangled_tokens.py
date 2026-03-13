@@ -98,8 +98,141 @@ def discover_triplets(
     return triplets
 
 
-def load_labels(json_path: Path) -> tuple[list, list]:
-    """Load VAD segments and transcript word entries from wrangled JSON."""
+def extract_convo_id(stem_name: str) -> str | None:
+    """Extract conversation/interaction ID from stem name for dyadic pairing.
+
+    Seamless: "I{interaction}_P{participant}" -> "I{interaction}"
+    CANDOR:   "{conv_uuid}_{user_id}"         -> "{conv_uuid}"
+    """
+    if stem_name.startswith("I") and "_P" in stem_name:
+        return stem_name.split("_P")[0]
+    if "_" in stem_name:
+        return stem_name.rsplit("_", 1)[0]
+    return None
+
+
+def build_partner_map(triplets: list) -> dict[str, str]:
+    """Return {str(mp4_path): partner_stem_name} for each matched dyadic pair."""
+    from collections import defaultdict
+    groups: dict[tuple, list] = defaultdict(list)
+    for mp4_path, _, _ in triplets:
+        convo_id = extract_convo_id(mp4_path.stem)
+        if convo_id:
+            groups[(str(mp4_path.parent), convo_id)].append((mp4_path.stem, str(mp4_path)))
+    partner_map: dict[str, str] = {}
+    for members in groups.values():
+        if len(members) == 2:
+            (stem_a, path_a), (stem_b, path_b) = members
+            partner_map[path_a] = stem_b
+            partner_map[path_b] = stem_a
+    return partner_map
+
+
+def load_seamless_emotion_data(npz_path: Path) -> dict:
+    """Load per-frame emotion arrays from a Seamless NPZ. Returns {} if unavailable."""
+    if not npz_path.exists():
+        return {}
+    try:
+        npz = np.load(str(npz_path), allow_pickle=False)
+        result = {}
+        for key in (
+            "movement_v4:emotion_valence",
+            "movement_v4:emotion_arousal",
+            "movement_v4:emotion_scores",
+            "movement_v4:FAUValue",
+        ):
+            if key in npz:
+                result[key] = npz[key]
+        return result
+    except Exception as e:
+        logger.debug("Could not load Seamless NPZ %s: %s", npz_path, e)
+        return {}
+
+
+def chunk_seamless_emotion(
+    emotion_data: dict, start_sec: float, end_sec: float, fps: float
+) -> tuple[dict, "np.ndarray | None"]:
+    """Per-chunk averages of Seamless per-frame emotion arrays.
+
+    Returns (record_fields_dict, fau_mean_or_None).
+    """
+    if not emotion_data:
+        return {}, None
+    start_frame = int(start_sec * fps)
+    end_frame = max(start_frame + 1, int(end_sec * fps))
+    result = {}
+
+    val_arr = emotion_data.get("movement_v4:emotion_valence")
+    if val_arr is not None and len(val_arr) > start_frame:
+        window = val_arr[start_frame:end_frame]
+        result["valence"] = float(np.mean(window)) if len(window) > 0 else 0.0
+
+    aro_arr = emotion_data.get("movement_v4:emotion_arousal")
+    if aro_arr is not None and len(aro_arr) > start_frame:
+        window = aro_arr[start_frame:end_frame]
+        result["arousal"] = float(np.mean(window)) if len(window) > 0 else 0.0
+
+    scores_arr = emotion_data.get("movement_v4:emotion_scores")
+    if scores_arr is not None and len(scores_arr) > start_frame:
+        window = scores_arr[start_frame:end_frame]
+        if len(window) > 0:
+            result["emotion_probs"] = np.mean(window, axis=0).tolist()
+
+    fau_mean = None
+    fau_arr = emotion_data.get("movement_v4:FAUValue")
+    if fau_arr is not None and len(fau_arr) > start_frame:
+        window = fau_arr[start_frame:end_frame]
+        if len(window) > 0:
+            fau_mean = np.mean(window, axis=0).astype(np.float32)
+
+    return result, fau_mean
+
+
+def chunk_candor_emotion(avf_entries: list, start_sec: float, end_sec: float) -> dict:
+    """Per-chunk averages from CANDOR audio_video_features entries."""
+    if not avf_entries:
+        return {}
+    window = [
+        e for e in avf_entries
+        if start_sec <= float(e.get("time_sec", -1)) < end_sec
+    ]
+    if not window:
+        return {}
+    result = {}
+    emotion_keys = sorted(k for k in window[0] if k.startswith("prob_face_"))
+    if emotion_keys:
+        try:
+            result["emotion_probs"] = [
+                float(np.mean([float(e.get(k, 0)) for e in window]))
+                for k in emotion_keys
+            ]
+        except (ValueError, TypeError):
+            pass
+    for scalar_key in ("is_speaking", "gaze_on"):
+        if scalar_key in window[0]:
+            try:
+                result[scalar_key] = float(
+                    np.mean([float(e.get(scalar_key, 0)) for e in window])
+                )
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
+_SESSION_META_FIELDS = (
+    "session_interaction_idx",
+    "session_total_interactions",
+    "session_id",
+    "prompt_a",
+    "prompt_b",
+    "ipc_a",
+    "ipc_b",
+    "interaction_type",
+)
+
+
+def load_labels(json_path: Path) -> tuple[list, list, list, dict]:
+    """Load VAD segments, transcript words, AVF entries, and interaction metadata from wrangled JSON."""
     with open(json_path) as f:
         data = json.load(f)
     vad_segs = data.get("metadata:vad", [])
@@ -107,7 +240,9 @@ def load_labels(json_path: Path) -> tuple[list, list]:
     transcript_segs = []
     for seg in data.get("metadata:transcript", []):
         transcript_segs.extend(seg.get("words", []))
-    return vad_segs, transcript_segs
+    avf_entries = data.get("metadata:audio_video_features", [])
+    interaction_meta = {k: data[k] for k in _SESSION_META_FIELDS if k in data}
+    return vad_segs, transcript_segs, avf_entries, interaction_meta
 
 
 def chunk_labels(
@@ -244,8 +379,12 @@ def main():
         logger.error("No triplets found under %s", args.wrangled_root)
         return
 
+    partner_map = build_partner_map(triplets)
+    logger.info("Dyadic partner map: %d matched stems", len(partner_map))
+
     sessions_processed: list[str] = []
     total_chunks = 0
+    skipped_existing = 0
 
     for tri_idx, (mp4_path, wav_path, json_path) in enumerate(triplets):
         session_name = mp4_path.parent.name       # e.g. S0172
@@ -253,15 +392,27 @@ def main():
         out_dir = tag_root / session_name / stem_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        if (out_dir / "v_raw.npy").exists():
+            logger.info("Skipping %d/%d: %s/%s (already processed)",
+                        tri_idx + 1, len(triplets), session_name, stem_name)
+            skipped_existing += 1
+            continue
+
         logger.info(
             "Processing %d/%d: %s/%s",
             tri_idx + 1, len(triplets), session_name, stem_name,
         )
 
-        vad_segs, word_list = load_labels(json_path)
+        vad_segs, word_list, avf_entries, interaction_meta = load_labels(json_path)
+        convo_id = extract_convo_id(stem_name)
+        partner_stem = partner_map.get(str(mp4_path))
+
+        npz_path = mp4_path.with_suffix(".npz")
+        seamless_emotion = load_seamless_emotion_data(npz_path)
+        is_seamless = bool(seamless_emotion) or npz_path.exists()
 
         v_rows, ph_rows, ph_label_rows, ph_mask_rows, p_rows = [], [], [], [], []
-        chunk_records: list[dict] = []
+        fau_rows: list = []
         pair_chunks = 0
 
         jsonl_path = out_dir / "chunks.jsonl"
@@ -296,7 +447,27 @@ def main():
                         "start_sec": round(start_sec, 4),
                         "end_sec": round(end_sec, 4),
                         **lbl,
+                        **interaction_meta,
                     }
+                    if convo_id:
+                        record["convo_id"] = convo_id
+                    if partner_stem:
+                        record["partner_stem"] = partner_stem
+
+                    if seamless_emotion:
+                        emotion_fields, fau_mean = chunk_seamless_emotion(
+                            seamless_emotion, start_sec, end_sec, fps
+                        )
+                        record.update(emotion_fields)
+                        fau_rows.append(
+                            fau_mean if fau_mean is not None
+                            else np.zeros(24, dtype=np.float32)
+                        )
+                    elif is_seamless:
+                        fau_rows.append(np.zeros(24, dtype=np.float32))
+                    elif avf_entries:
+                        record.update(chunk_candor_emotion(avf_entries, start_sec, end_sec))
+
                     jsonl_fh.write(json.dumps(record) + "\n")
                     pair_chunks += 1
                     total_chunks += 1
@@ -314,8 +485,14 @@ def main():
         np.save(str(out_dir / "ph_mask.npy"),    np.stack(ph_mask_rows))
         np.save(str(out_dir / "p_raw.npy"),      np.stack(p_rows))
 
+        if is_seamless and fau_rows:
+            np.save(str(out_dir / "fau.npy"), np.stack(fau_rows))
+
         logger.info("  → %d chunks saved to %s", pair_chunks, out_dir)
         sessions_processed.append(f"{session_name}/{stem_name}")
+
+    if skipped_existing:
+        logger.info("Skipped %d already-processed stem(s)", skipped_existing)
 
     # Write config.json at backbone_tag root
     config = {

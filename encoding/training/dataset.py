@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +144,109 @@ class PregenDataset(Dataset):
             torch.from_numpy(arrs["ph_mask"][i].astype(np.float32)).bool(),
             torch.from_numpy(arrs["p_raw"][i].astype(np.float32)),
         )
+
+
+class DyadicPairDataset(Dataset):
+    """
+    Loads matched dyadic pairs from pregenerated tokens.
+
+    Uses `partner_stem` recorded in each stem's chunks.jsonl to pair chunk rows
+    from two participants in the same conversation. Only emits pairs where both
+    stems and partner_stem exist under the same session directory.
+
+    __getitem__ returns (A_features, B_features) where each is a 5-tuple matching
+    the PregenDataset item format: (v_raw, ph_raw, ph_labels, ph_mask, p_raw).
+
+    Stems with no partner_stem or whose partner is missing fall back to no pairs.
+    """
+
+    def __init__(self, pregen_root: str, cfg: CAMELSConfig):
+        self.pregen_root = pregen_root
+        self.cfg = cfg
+        self._pairs: list[tuple[str, int, str, int]] = []  # (stem_dir_A, row_A, stem_dir_B, row_B)
+        self._arrays: dict[str, dict[str, np.ndarray]] = {}
+        self._build_pairs()
+
+    def _load_stem(self, stem_dir: str) -> None:
+        if stem_dir in self._arrays:
+            return
+        self._arrays[stem_dir] = {
+            "v_raw":     np.load(os.path.join(stem_dir, "v_raw.npy"),     mmap_mode="r"),
+            "ph_raw":    np.load(os.path.join(stem_dir, "ph_raw.npy"),    mmap_mode="r"),
+            "ph_labels": np.load(os.path.join(stem_dir, "ph_labels.npy"), mmap_mode="r"),
+            "ph_mask":   np.load(os.path.join(stem_dir, "ph_mask.npy"),   mmap_mode="r"),
+            "p_raw":     np.load(os.path.join(stem_dir, "p_raw.npy"),     mmap_mode="r"),
+        }
+
+    def _build_pairs(self) -> None:
+        root = Path(self.pregen_root)
+        stem_dirs = sorted(p.parent for p in root.rglob("v_raw.npy") if p.is_file())
+
+        # (session_dir_str, stem_name) -> stem_dir_str
+        stem_dir_map: dict[tuple[str, str], str] = {
+            (str(sd.parent), sd.name): str(sd) for sd in stem_dirs
+        }
+
+        # Group stems by (session_dir, partner_stem) to pair both directions once
+        paired: set[tuple[str, str]] = set()
+
+        for stem_dir in stem_dirs:
+            jsonl_path = stem_dir / "chunks.jsonl"
+            if not jsonl_path.exists():
+                continue
+
+            partner_stem: str | None = None
+            chunk_count_a = 0
+            with open(jsonl_path) as f:
+                for line in f:
+                    rec = json.loads(line)
+                    if partner_stem is None:
+                        partner_stem = rec.get("partner_stem")
+                    chunk_count_a += 1
+
+            if not partner_stem:
+                continue
+
+            session_str = str(stem_dir.parent)
+            partner_dir_str = stem_dir_map.get((session_str, partner_stem))
+            if not partner_dir_str:
+                continue
+
+            pair_key = tuple(sorted([str(stem_dir), partner_dir_str]))
+            if pair_key in paired:
+                continue
+            paired.add(pair_key)
+
+            partner_jsonl = Path(partner_dir_str) / "chunks.jsonl"
+            if not partner_jsonl.exists():
+                continue
+            chunk_count_b = sum(1 for _ in open(partner_jsonl))
+
+            n = min(chunk_count_a, chunk_count_b)
+            for i in range(n):
+                self._pairs.append((str(stem_dir), i, partner_dir_str, i))
+
+            self._load_stem(str(stem_dir))
+            self._load_stem(partner_dir_str)
+
+        logger.info("DyadicPairDataset: %d pairs from %s", len(self._pairs), self.pregen_root)
+
+    def __len__(self) -> int:
+        return len(self._pairs)
+
+    def _get_features(self, stem_dir: str, i: int):
+        arrs = self._arrays[stem_dir]
+        return (
+            torch.from_numpy(arrs["v_raw"][i].astype(np.float32)),
+            torch.from_numpy(arrs["ph_raw"][i].astype(np.float32)),
+            torch.from_numpy(arrs["ph_labels"][i].astype(np.int64)),
+            torch.from_numpy(arrs["ph_mask"][i].astype(np.float32)).bool(),
+            torch.from_numpy(arrs["p_raw"][i].astype(np.float32)),
+        )
+
+    def __getitem__(self, idx: int):
+        stem_dir_a, row_a, stem_dir_b, row_b = self._pairs[idx]
+        return self._get_features(stem_dir_a, row_a), self._get_features(stem_dir_b, row_b)
 
 
 def make_dataloaders(

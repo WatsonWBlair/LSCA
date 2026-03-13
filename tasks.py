@@ -59,6 +59,20 @@ def wrangle_seamless_task(c, count=1, style="improvised", split="dev"):
     wrangle_seamless(int(count), style, split)
 
 
+@task(name="wrangle-seamless-sessions")
+def wrangle_seamless_sessions_task(c, count=28, style="improvised", split="dev"):
+    """Process N Seamless sessions in chronological order with prompt metadata."""
+    from src.data_wrangling.seamless_interaction.wrangle import wrangle_seamless_sessions
+    wrangle_seamless_sessions(int(count), style, split)
+
+
+@task(name="wrangle-seamless-staged")
+def wrangle_seamless_staged_task(c, style="improvised", split="dev"):
+    """Backfill already-staged Seamless NPZs in SOURCE_DIR into datasets/wrangled/."""
+    from src.data_wrangling.seamless_interaction.wrangle import wrangle_staged_seamless
+    wrangle_staged_seamless(style, split)
+
+
 @task(name="wrangle-candor")
 def wrangle_candor_task(c, start=1, count=None):
     """Process CANDOR parts iteratively (clean-as-you-go)."""
@@ -77,15 +91,6 @@ def wrangle_candor_to_wrangled_task(c):
 
     total = wrangle_all_candor(CANDOR_DIR, Path("datasets/wrangled"))
     print(f"Wrangled {total} user(s) total")
-
-
-@task(name="generate-tokens")
-def generate_tokens_task(c, data_root="datasets/", output_dir="outputs/features", device="cpu"):
-    """Pre-generate backbone tokens from wrangled conversations for adapter training."""
-    c.run(
-        f"python scripts/generate_tokens.py "
-        f"--data-root {data_root} --output-dir {output_dir} --device {device}"
-    )
 
 
 @task(name="generate-wrangled-tokens")

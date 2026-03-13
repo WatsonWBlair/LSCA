@@ -6,54 +6,16 @@ Official tools: https://github.com/facebookresearch/seamless-interaction
 
 from __future__ import annotations
 
+import re
 from collections.abc import Generator
 from pathlib import Path
 
 from seamless_interaction.fs import DatasetConfig, SeamlessInteractionFS
 
+_SESSION_PATTERN = re.compile(r"^(V\d+_S\d+)_(I(\d+))_P\w+$")
+
 DEFAULT_LOCAL_DIR: Path = Path("datasets/seamless_interaction")
 
-
-def download_interaction(
-    style: str,
-    split: str,
-    *,
-    local_dir: Path = DEFAULT_LOCAL_DIR,
-    num_pairs: int = 1,
-) -> None:
-    """Download interaction pairs from S3 via seamless_interaction library.
-
-    Auto-samples interaction pairs from preferred vendors and downloads
-    all four file types (.mp4, .wav, .json, .npz) for each participant.
-
-    Args:
-        style: "naturalistic" or "improvised".
-        split: "train", "dev", "test", or "private".
-        local_dir: Local directory to save downloaded files.
-        num_pairs: Number of interaction pairs to download.
-
-    Raises:
-        FileNotFoundError: If no interaction pairs are found.
-    """
-    config = DatasetConfig(label=style, split=split, preferred_vendors_only=True)
-    fs = SeamlessInteractionFS(config=config)
-
-    print(f"Getting {num_pairs} random interaction pair(s)...")
-    pairs = fs.get_interaction_pairs(
-        num_pairs=num_pairs,
-        split=split,
-        label=style,
-        preferred_vendors_only=True,
-    )
-
-    if not pairs:
-        raise FileNotFoundError("No interaction pairs found")
-
-    # Flatten all pairs into a single list of file IDs
-    file_ids = [fid for pair in pairs for fid in pair]
-    print(f"Sampled {len(pairs)} pair(s), {len(file_ids)} file(s)")
-
-    fs.download_batch_from_s3(file_ids, local_dir=str(local_dir))
 
 
 def download_pairs_iter(
@@ -97,3 +59,72 @@ def download_pairs_iter(
         print(f"Downloading pair {i}/{len(pairs)} ({len(pair)} files)...")
         fs.download_batch_from_s3(pair, local_dir=str(local_dir))
         yield pair
+
+
+def download_sessions_iter(
+    style: str,
+    split: str,
+    num_sessions: int = 28,
+    *,
+    local_dir: Path = DEFAULT_LOCAL_DIR,
+) -> Generator[tuple[str, str, list[str], int], None, None]:
+    """Download session interactions one at a time in chronological (archive_idx) order.
+
+    Completes all interactions of one session before moving to the next.
+    Each interaction's files are downloaded together, then yielded.
+
+    Args:
+        style: "naturalistic" or "improvised".
+        split: "train", "dev", "test", or "private".
+        num_sessions: Number of sessions to download.
+        local_dir: Local directory to save downloaded files.
+
+    Yields:
+        (session_key, interaction_key, file_ids, session_total_interactions) tuples.
+        session_key: e.g. "V00_S0700"
+        interaction_key: e.g. "I00000131"
+        file_ids: list of file IDs for both participants
+        session_total_interactions: total interactions in this session
+    """
+    config = DatasetConfig(label=style, split=split, preferred_vendors_only=True)
+    fs = SeamlessInteractionFS(config=config)
+
+    print(f"Getting {num_sessions} session(s)...")
+    session_groups = fs.get_session_groups(
+        num_sessions=num_sessions,
+        interactions_per_session=0,
+        label=style,
+        split=split,
+    )
+
+    if not session_groups:
+        raise FileNotFoundError("No sessions found")
+
+    print(f"Sampled {len(session_groups)} session(s)")
+
+    for session_file_ids in session_groups:
+        if not session_file_ids:
+            continue
+
+        # Extract session_key from first file_id
+        m = _SESSION_PATTERN.match(session_file_ids[0])
+        session_key = m.group(1) if m else "UNKNOWN"
+
+        # Group file_ids by interaction key, preserving archive_idx order
+        seen: dict[str, list[str]] = {}
+        for fid in session_file_ids:
+            fm = _SESSION_PATTERN.match(fid)
+            if not fm:
+                continue
+            i_key = fm.group(2)  # e.g. "I00000131"
+            if i_key not in seen:
+                seen[i_key] = []
+            seen[i_key].append(fid)
+
+        session_total = len(seen)
+        for i_key, file_ids in seen.items():
+            print(
+                f"Downloading {session_key} / {i_key} ({len(file_ids)} files)..."
+            )
+            fs.download_batch_from_s3(file_ids, local_dir=str(local_dir))
+            yield session_key, i_key, file_ids, session_total

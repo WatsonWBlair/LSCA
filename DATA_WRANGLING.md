@@ -7,11 +7,11 @@ This document covers data source selection and preprocessing for the LSCA projec
 ## Quick Start
 
 ```bash
-invoke wrangle-seamless --count 3
+invoke wrangle-seamless-sessions --count 1
 invoke wrangle-candor --count 1
 ```
 
-Downloads and processes a small development dataset (3 Seamless Interaction pairs + 1 CANDOR part).
+Downloads and processes a small development dataset (1 Seamless session ~11 interactions + 1 CANDOR part).
 
 ## Memory-Efficient Processing
 
@@ -32,18 +32,43 @@ Each item is fully processed before the next is downloaded, keeping peak disk us
 
 > Note: In-person interactions differ from video calls in turn-taking and gaze patterns ([Tian et al., 2024](./litrature/datawrangling/Seamless_Interaction.pdf)), but the dataset's goals align with ours: training agents with natural gestures, modeling turn-taking, and understanding multimodal social dynamics.
 
+### Setup: Local `seamless_interaction` Patch
+
+The upstream library (`C:\Users\watso\Development\seamless_interaction`) calls `np.load()` without
+`allow_pickle=True`. Some `movement_v4/pred_vertices` files contain object arrays and will crash
+the multiprocessing pool with `ValueError: Object arrays cannot be loaded when allow_pickle=False`.
+
+Apply this one-line patch before running any wrangling commands:
+
+```python
+# C:\Users\watso\Development\seamless_interaction\src\seamless_interaction\fs.py  ~line 969
+# Change:
+data = np.load(tmp_file_path)
+# To:
+data = np.load(tmp_file_path, allow_pickle=True)
+```
+
+This patch is local-only and does not need to be committed to this repo.
+
 ### Wrangling
 
+**Session-based (preferred):**
+```bash
+invoke wrangle-seamless-sessions --count N
+```
+
+Downloads full sessions in chronological (archive_idx) order. Interactions within a session are processed sequentially, preserving recording order. Session metadata and conversation prompts are attached to each output JSON.
+
+**Options:**
+- `--count N` — Number of sessions (default: 28, all Improvised dev)
+- `--style` — "naturalistic" or "improvised" (default: improvised)
+- `--split` — "train", "dev", or "test" (default: dev)
+
+**Random pairs (for quick sampling):**
 ```bash
 invoke wrangle-seamless --count N
 ```
-
-Downloads, crops to webcam framing, and cleans up one pair at a time.
-
-**Options:**
-- `--count N` — Number of interaction pairs (default: 1)
-- `--style` — "naturalistic" or "improvised" (default: improvised)
-- `--split` — "train", "dev", or "test" (default: dev)
+Downloads N random interaction pairs with no session ordering or prompt metadata.
 
 ### Output Structure
 
@@ -52,11 +77,26 @@ datasets/wrangled/
   S{session}/
     I{interaction}_P{participant}.mp4   # Cropped video (H.264)
     I{interaction}_P{participant}.wav   # Audio (16kHz mono)
-    I{interaction}_P{participant}.json  # Transcript + VAD metadata
+    I{interaction}_P{participant}.json  # Transcript + VAD + session metadata
     I{interaction}_P{participant}.npz   # Pre-computed keypoints
 ```
 
 Participants in the same interaction share session and interaction IDs, enabling programmatic conversation reconstruction.
+
+**Session-wrangled JSON fields** (present when using `wrangle-seamless-sessions`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | str | Session key, e.g. `"V00_S0700"` |
+| `session_interaction_idx` | int | 0-indexed position of this interaction within the session |
+| `session_total_interactions` | int | Total interactions in the session |
+| `prompt_a` | str | Prompt shown to participant A |
+| `prompt_b` | str | Prompt shown to participant B |
+| `ipc_a` | str | IPC code for participant A |
+| `ipc_b` | str | IPC code for participant B |
+| `interaction_type` | str | e.g. `"ipc_conversation"` |
+
+These fields are propagated into each row of `chunks.jsonl` during token pre-generation.
 
 ---
 
@@ -138,6 +178,11 @@ Chunk rate: **~3,600 chunks per hour** of footage.
 ### Utility Commands
 
 For debugging or archival workflows:
+
+**Seamless Interaction:**
+- `invoke wrangle-seamless-staged` — Backfill already-staged Seamless NPZs from `datasets/seamless_interaction/` into `datasets/wrangled/`
+
+**CANDOR:**
 - `invoke download-candor` — Download zips without processing
 - `invoke download-candor --extract` — Download and extract zips
 - `invoke extract-candor` — Extract audio from already-extracted MKVs

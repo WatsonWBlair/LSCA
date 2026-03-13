@@ -26,7 +26,8 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 **Data Wrangling** (clean-as-you-go processing):
 | Command | Description |
 |---------|-------------|
-| `invoke wrangle-seamless --count N` | Process N Seamless Interaction pairs |
+| `invoke wrangle-seamless-sessions --count N` | Process N full Seamless sessions in chronological order with prompt metadata (default: 28) |
+| `invoke wrangle-seamless --count N` | Process N random Seamless interaction pairs (no session ordering or prompt metadata) |
 | `invoke wrangle-candor` | Download, extract, and wrangle CANDOR parts into datasets/wrangled/ |
 | `invoke wrangle-candor-to-wrangled` | Backfill already-downloaded CANDOR parts into datasets/wrangled/ |
 | `invoke generate-wrangled-tokens` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
@@ -36,7 +37,7 @@ Run tests: `pytest tests/ -v` or `pytest tests/test_config.py::test_default_conf
 ## Tech Stack
 
 - **Python 3.11** with PyTorch, NumPy, OpenCV
-- **Testing:** pytest (79 tests across 7 test files)
+- **Testing:** pytest (85 tests across 8 test files)
 - **Linting:** ruff (via `invoke lint`), pylint (via Codacy)
 - **Code analysis:** Codacy with semgrep + trivy (vulnerability scanning)
 
@@ -114,7 +115,7 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 
 - **Latent dimension is NEVER hardcoded** — always flows from `CAMELSConfig.latent.d_latent`
 - Frames must be **RGB float32 + ImageNet normalized** (MARLIN requirement)
-- Row N in every .npy == chunk N in chunks.json — never violate
+- Row N in every .npy == chunk N in chunks.jsonl — never violate
 - Silent chunks → append zero rows, never skip chunk_id
 - FM loss: adapters **detached** — only VelocityNets receive gradients
 - PhonemeAdapter is **linear** (not AVAE) — verification uses PhonemeProbeHead instead
