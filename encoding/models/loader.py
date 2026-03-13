@@ -39,11 +39,13 @@ def load_wav2vec2_ctc(model_name: str, device: str = "cpu") -> tuple:
     The model produces both hidden_states (for embedding) and logits (for CTC decode).
     num_phoneme_classes is auto-detected from the model's output vocabulary.
     """
-    from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+    from transformers import Wav2Vec2ForCTC, Wav2Vec2FeatureExtractor
 
     logger.info("Loading wav2vec2-CTC %s ...", model_name)
     model = Wav2Vec2ForCTC.from_pretrained(model_name)
-    processor = Wav2Vec2Processor.from_pretrained(model_name)
+    # Use FeatureExtractor only — avoids requiring espeak-ng system binary.
+    # The phoneme string labels from processor.decode() are discarded downstream.
+    processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
     model = model.to(device).eval()
     for p in model.parameters():
         p.requires_grad_(False)
@@ -76,12 +78,23 @@ def load_emformer(device: str = "cpu") -> tuple:
     return emformer_model, emformer_decoder, token_processor, feat_extractor
 
 
-def load_all_models(cfg: CAMELSConfig, device: str = "cpu") -> dict:
+def load_all_models(
+    cfg: CAMELSConfig,
+    device: str = "cpu",
+    load_emformer: bool = True,
+    half: bool = False,
+) -> dict:
     """
     Load all frozen models. Returns dict with keys:
       marlin, wav2vec2_ctc, wav2vec2_processor, num_phoneme_classes,
       emformer_model, emformer_decoder, token_processor, feat_extractor, device
+
+    Args:
+        load_emformer: if False, skip Emformer load and return None for its keys.
+        half: if True, cast MARLIN and wav2vec2 to fp16 after loading.
     """
+    _load_emformer = load_emformer  # avoid shadowing the module-level function
+
     if device == "cuda" and not torch.cuda.is_available():
         logger.warning("CUDA not available — falling back to CPU")
         device = "cpu"
@@ -89,13 +102,26 @@ def load_all_models(cfg: CAMELSConfig, device: str = "cpu") -> dict:
         logger.warning("MPS not available — falling back to CPU")
         device = "cpu"
 
-    em_model, em_decoder, tok_proc, feat_ext = load_emformer(device)
+    # Load MARLIN first so cv2 is imported before torchaudio/transformers
+    # alter the Windows DLL search state (avoids "procedure not found" on cv2).
+    marlin = load_marlin(cfg.streaming.marlin_model_name, device)
     wav2vec2_ctc, wav2vec2_proc, num_classes = load_wav2vec2_ctc(
         cfg.streaming.wav2vec2_ctc_model, device,
     )
 
+    if half:
+        marlin = marlin.half()
+        wav2vec2_ctc = wav2vec2_ctc.half()
+        logger.info("Models cast to fp16")
+
+    if _load_emformer:
+        em_model, em_decoder, tok_proc, feat_ext = load_emformer(device)
+    else:
+        logger.info("Skipping Emformer load (load_emformer=False)")
+        em_model = em_decoder = tok_proc = feat_ext = None
+
     return {
-        "marlin": load_marlin(cfg.streaming.marlin_model_name, device),
+        "marlin": marlin,
         "wav2vec2_ctc": wav2vec2_ctc,
         "wav2vec2_processor": wav2vec2_proc,
         "num_phoneme_classes": num_classes,

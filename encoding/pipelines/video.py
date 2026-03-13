@@ -73,9 +73,9 @@ def encode_windows_marlin(
             x = torch.stack(win)                      # (16, 3, 224, 224)
             x = x.permute(1, 0, 2, 3).unsqueeze(0)   # (1, 3, 16, 224, 224)
             device = next(marlin_model.parameters()).device
-            x = x.to(device)
+            x = x.to(device=device, dtype=next(marlin_model.parameters()).dtype)
             feat = marlin_model.extract_features(x, keep_seq=False)  # (1, d_video)
-            embeddings.append(feat.squeeze(0).cpu())
+            embeddings.append(feat.squeeze(0).float().cpu())
 
     return torch.stack(embeddings)  # (W, d_video)
 

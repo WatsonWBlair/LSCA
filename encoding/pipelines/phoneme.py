@@ -65,9 +65,10 @@ def _ctc_decode_with_boundaries(
             "end_frame": len(pred_ids),
         })
 
-    # Decode label strings and compute timestamps
+    # Compute timestamps; use label_id as string if tokenizer decode unavailable
     for seg in segments:
-        seg["label"] = processor.decode([seg["label_id"]]).strip()
+        decode_fn = getattr(processor, "decode", None)
+        seg["label"] = decode_fn([seg["label_id"]]).strip() if decode_fn else str(seg["label_id"])
         seg["start_sec"] = round(chunk_offset_sec + seg["start_frame"] * frame_dur, 4)
         seg["end_sec"] = round(chunk_offset_sec + seg["end_frame"] * frame_dur, 4)
 
@@ -119,7 +120,7 @@ def phoneme_pipeline(
         return_tensors="pt",
         padding=False,
     )
-    input_values = inputs.input_values.to(device)
+    input_values = inputs.input_values.to(device=device, dtype=next(wav2vec2_ctc.parameters()).dtype)
 
     # Single forward pass: get both hidden states and logits
     with torch.no_grad():
@@ -143,7 +144,7 @@ def phoneme_pipeline(
             [],
         )
 
-    hidden_sq = hidden.squeeze(0).cpu()  # (T_frames, d_phoneme)
+    hidden_sq = hidden.squeeze(0).float().cpu()  # (T_frames, d_phoneme)
 
     # Mean-pool hidden states per phoneme segment
     phone_embs_list = []

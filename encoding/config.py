@@ -21,7 +21,7 @@ class LatentConfig:
     """Dimensions of the shared latent space and encoder outputs."""
     d_latent: int = 768
     d_video: int = 768             # MARLIN ViT-Base output
-    d_phoneme: int = 768           # wav2vec2-lv-60-espeak-cv-ft hidden size
+    d_phoneme: int = 1024          # wav2vec2-lv-60-espeak-cv-ft hidden size (1024, not 768)
     d_prosody: int = 22            # librosa features (expanded)
     max_phones: int = 50           # 99th-percentile phoneme count per 2s chunk
     num_phoneme_classes: int = 0   # 0 = auto-detect from CTC model vocab at load time
