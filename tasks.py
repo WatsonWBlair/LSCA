@@ -114,6 +114,19 @@ def analyze_dataset_task(c, output=None, top_n=50, wrangled_root="datasets/wrang
     c.run(cmd)
 
 
+@task(name="wrangle-cmu-mosei")
+def wrangle_cmu_mosei_task(c, raw_root="datasets/cmu_mosei", max_segments=None):
+    """Wrangle available CMU-MOSEI segments into datasets/wrangled/MS*/."""
+    from src.data_wrangling.cmu_mosei.wrangle import wrangle_cmu_mosei
+    wrangle_cmu_mosei(raw_root, "datasets/wrangled", int(max_segments) if max_segments else None)
+
+
+@task(name="extract-merbench-features")
+def extract_merbench_features_task(c, merbench_root="datasets/merbench", device="cpu", datasets="iemocap cmu_mosei meld"):
+    """Extract CAMELS frozen features for MERBench evaluation."""
+    c.run(f"python scripts/extract_merbench_features.py --merbench-root {merbench_root} --datasets {datasets} --device {device}")
+
+
 # =============================================================================
 # CANDOR Utilities
 # =============================================================================
