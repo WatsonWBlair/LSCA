@@ -127,10 +127,17 @@ def wrangle_seamless_sessions(
     interactions_lookup = load_interactions_lookup()
     print(f"Loaded {len(interactions_lookup)} interaction prompt records")
 
+    already_wrangled = {
+        d.name for d in OUTPUT_DIR.iterdir()
+        if d.is_dir() and d.name.startswith("S") and any(d.iterdir())
+    }
+    if already_wrangled:
+        print(f"Skipping {len(already_wrangled)} already-wrangled session(s): {sorted(already_wrangled)}")
+
     session_idx_counter: dict[str, int] = {}
 
     for session_key, interaction_key, file_ids, session_total in download_sessions_iter(
-        style, split, num_sessions=num_sessions
+        style, split, num_sessions=num_sessions, skip_sessions=already_wrangled
     ):
         # Track 0-indexed position of this interaction within its session
         if session_key not in session_idx_counter:

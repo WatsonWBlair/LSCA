@@ -191,7 +191,11 @@ def wrangle_conversation(conv_dir: Path, part_num: str, wrangled_root: Path) -> 
         json_dst = out_dir / f"{stem}.json"
 
         if json_dst.exists():
-            logger.info("Skipping %s (already wrangled)", stem)
+            if not wav_dst.exists() and wav_src.exists():
+                shutil.copy2(wav_src, wav_dst)
+                logger.info("Backfilled wav for %s", stem)
+            else:
+                logger.info("Skipping %s (already wrangled)", stem)
             written += 1
             continue
 

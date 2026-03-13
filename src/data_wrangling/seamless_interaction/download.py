@@ -67,6 +67,7 @@ def download_sessions_iter(
     num_sessions: int = 28,
     *,
     local_dir: Path = DEFAULT_LOCAL_DIR,
+    skip_sessions: set[str] | None = None,
 ) -> Generator[tuple[str, str, list[str], int], None, None]:
     """Download session interactions one at a time in chronological (archive_idx) order.
 
@@ -109,6 +110,12 @@ def download_sessions_iter(
         # Extract session_key from first file_id
         m = _SESSION_PATTERN.match(session_file_ids[0])
         session_key = m.group(1) if m else "UNKNOWN"
+
+        # Skip already-wrangled sessions
+        s_part = session_key.split("_", 1)[1]  # e.g. "S0700"
+        if skip_sessions and s_part in skip_sessions:
+            print(f"Skipping {s_part} (already wrangled)")
+            continue
 
         # Group file_ids by interaction key, preserving archive_idx order
         seen: dict[str, list[str]] = {}
