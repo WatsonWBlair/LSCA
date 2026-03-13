@@ -105,6 +105,15 @@ def generate_wrangled_tokens_task(c, device="cpu", max_pairs=None):
     c.run(cmd)
 
 
+@task(name="analyze-dataset")
+def analyze_dataset_task(c, output=None, top_n=50, wrangled_root="datasets/wrangled"):
+    """Print dataset statistics report. Use --output FILE to also save as markdown."""
+    cmd = f"python scripts/analyze_dataset.py --wrangled-root {wrangled_root} --top-n {top_n}"
+    if output:
+        cmd += f" --output {output}"
+    c.run(cmd)
+
+
 # =============================================================================
 # CANDOR Utilities
 # =============================================================================
