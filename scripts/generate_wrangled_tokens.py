@@ -32,6 +32,7 @@ for _extra in ("/opt/homebrew/bin", "/usr/local/bin"):
     if _extra not in os.environ.get("PATH", "") and os.path.isdir(_extra):
         os.environ["PATH"] = _extra + os.pathsep + os.environ.get("PATH", "")
 
+import cv2  # must import before torchvision to avoid Windows DLL conflict
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
@@ -231,8 +232,8 @@ _SESSION_META_FIELDS = (
 )
 
 
-def load_labels(json_path: Path) -> tuple[list, list, list, dict]:
-    """Load VAD segments, transcript words, AVF entries, and interaction metadata from wrangled JSON."""
+def load_labels(json_path: Path) -> tuple[list, list, list, dict, dict]:
+    """Load VAD segments, transcript words, AVF entries, interaction metadata, and segment labels from wrangled JSON."""
     with open(json_path) as f:
         data = json.load(f)
     vad_segs = data.get("metadata:vad", [])
@@ -242,7 +243,8 @@ def load_labels(json_path: Path) -> tuple[list, list, list, dict]:
         transcript_segs.extend(seg.get("words", []))
     avf_entries = data.get("metadata:audio_video_features", [])
     interaction_meta = {k: data[k] for k in _SESSION_META_FIELDS if k in data}
-    return vad_segs, transcript_segs, avf_entries, interaction_meta
+    segment_labels = data.get("metadata:labels", {})
+    return vad_segs, transcript_segs, avf_entries, interaction_meta, segment_labels
 
 
 def chunk_labels(
@@ -284,66 +286,86 @@ def chunk_labels(
     }
 
 
-def load_all_frames(mp4_path: Path, cfg) -> tuple[list[torch.Tensor], float]:
-    import cv2
+def _preprocess_frame(bgr, marlin_size: int, im_mean: list, im_std: list) -> torch.Tensor:
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    rgb = cv2.resize(rgb, (marlin_size, marlin_size), interpolation=cv2.INTER_LINEAR)
+    t = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
+    return TF.normalize(t, mean=im_mean, std=im_std)
+
+
+def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
+    """Yield (chunk_frames, audio_chunk, video_fps, chunk_id, start_sec, end_sec).
+
+    Streams video frames through a deque to avoid loading the entire video into RAM.
+    Audio is loaded fully upfront (small, ~25 MB max).
+    """
+    from collections import deque
+
+    waveform, _ = librosa.load(str(wav_path), sr=cfg.streaming.sample_rate, mono=True)
+
     marlin_size = cfg.streaming.marlin_size
     im_mean = list(cfg.streaming.imagenet_mean)
     im_std = list(cfg.streaming.imagenet_std)
 
     cap = cv2.VideoCapture(str(mp4_path))
     if not cap.isOpened():
-        logger.warning("Cannot open %s", mp4_path)
-        return [], 30.0
-
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frames: list[torch.Tensor] = []
-
-    while True:
-        ret, bgr = cap.read()
-        if not ret:
-            break
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, (marlin_size, marlin_size), interpolation=cv2.INTER_LINEAR)
-        t = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
-        t = TF.normalize(t, mean=im_mean, std=im_std)
-        frames.append(t)
-
-    cap.release()
-    return frames, video_fps
-
-
-def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
-    """Yield (chunk_frames, audio_chunk, video_fps, chunk_id, start_sec, end_sec)."""
-    waveform, _ = librosa.load(str(wav_path), sr=cfg.streaming.sample_rate, mono=True)
-    frames, video_fps = load_all_frames(mp4_path, cfg)
-
-    if not frames:
         logger.warning("No frames from %s — skipping", mp4_path)
         return
+
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     audio_win    = int(cfg.streaming.window_sec * cfg.streaming.sample_rate)
     audio_stride = int(cfg.streaming.stride_sec * cfg.streaming.sample_rate)
     video_win    = int(cfg.streaming.window_sec * video_fps)
     video_stride = int(cfg.streaming.stride_sec * video_fps)
 
+    # Prime the deque with the first window's worth of frames
+    frame_buffer: deque[torch.Tensor] = deque()
+    eof = False
+    while len(frame_buffer) < video_win:
+        ret, bgr = cap.read()
+        if not ret:
+            eof = True
+            break
+        frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
+
+    if not frame_buffer:
+        cap.release()
+        logger.warning("No frames from %s — skipping", mp4_path)
+        return
+
     audio_start = 0
-    frame_start = 0
     chunk_id = 0
 
     while audio_start + audio_win <= len(waveform):
+        if len(frame_buffer) < video_win and eof:
+            break
+
         start_sec = audio_start / cfg.streaming.sample_rate
         end_sec   = (audio_start + audio_win) / cfg.streaming.sample_rate
         yield (
-            frames[frame_start : frame_start + video_win],
+            list(frame_buffer)[:video_win],
             waveform[audio_start : audio_start + audio_win],
             video_fps,
             chunk_id,
             start_sec,
             end_sec,
         )
+
+        # Advance: read video_stride new frames, drop video_stride old ones
+        for _ in range(video_stride):
+            ret, bgr = cap.read()
+            if not ret:
+                eof = True
+                break
+            frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
+        for _ in range(min(video_stride, len(frame_buffer))):
+            frame_buffer.popleft()
+
         audio_start += audio_stride
-        frame_start += video_stride
         chunk_id += 1
+
+    cap.release()
 
 
 def main():
@@ -360,8 +382,8 @@ def main():
     backbone_tag = make_backbone_tag(cfg)
     tag_root = Path(args.pregen_root) / backbone_tag
 
-    logger.info("Loading frozen models (device=%s) ...", args.device)
-    models = load_all_models(cfg, device=args.device)
+    logger.info("Loading frozen models (device=%s, half=True, emformer=False) ...", args.device)
+    models = load_all_models(cfg, device=args.device, load_emformer=False, half=True)
 
     if "num_phoneme_classes" in models:
         cfg.latent.num_phoneme_classes = models["num_phoneme_classes"]
@@ -403,7 +425,7 @@ def main():
             tri_idx + 1, len(triplets), session_name, stem_name,
         )
 
-        vad_segs, word_list, avf_entries, interaction_meta = load_labels(json_path)
+        vad_segs, word_list, avf_entries, interaction_meta, segment_labels = load_labels(json_path)
         convo_id = extract_convo_id(stem_name)
         partner_stem = partner_map.get(str(mp4_path))
 
@@ -449,6 +471,8 @@ def main():
                         **lbl,
                         **interaction_meta,
                     }
+                    if segment_labels:
+                        record["segment_labels"] = segment_labels
                     if convo_id:
                         record["convo_id"] = convo_id
                     if partner_stem:
