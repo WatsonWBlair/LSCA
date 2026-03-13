@@ -183,7 +183,7 @@ def eval_dimension_utilization(
     d_latent: int,
     threshold: float = 0.01,
 ) -> dict[str, float]:
-    """Active dimensions per modality. Target: > 900."""
+    """Active dimensions per modality. Target: > d_latent * 0.75 (75% utilization)."""
     results = {}
     for name, z in z_dict.items():
         var = z.var(dim=0)

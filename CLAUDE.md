@@ -37,7 +37,7 @@ Run tests: `pytest tests/ -v` or `pytest tests/test_config.py::test_default_conf
 ## Tech Stack
 
 - **Python 3.11** with PyTorch, NumPy, OpenCV
-- **Testing:** pytest (85 tests across 8 test files)
+- **Testing:** pytest (~94 tests across 11 test files)
 - **Linting:** ruff (via `invoke lint`), pylint (via Codacy)
 - **Code analysis:** Codacy with semgrep + trivy (vulnerability scanning)
 
@@ -92,7 +92,9 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 
 ### Training (3-stage protocol)
 
-- **Stage A:** InfoNCE + L_var + L_cov + L_aux (phoneme probe)
+MoCo (Momentum Contrast) is the default contrastive loss; falls back to InfoNCE when disabled. Configured via `CAMELSConfig.moco` (`MoCoConfig`: `enabled`, `momentum`, `queue_size`, `temperature`).
+
+- **Stage A:** MoCo/InfoNCE + L_var + L_cov + L_aux (phoneme probe)
 - **Stage B:** + AVAE (capacity-controlled KL) + L_orth
 - **Stage C:** + bidirectional FM (video ↔ phoneme, separate optimizer)
 
@@ -100,16 +102,27 @@ Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
 
 | File | Purpose |
 |------|---------|
-| `run_pipeline.py` | Live streaming pipeline |
-| `scripts/preprocess_data.py` | Extract raw features for training |
 | `scripts/generate_wrangled_tokens.py` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
 | `scripts/train_adapters.py` | Run 3-stage training protocol |
+| `scripts/preprocess_data.py` | **Deprecated** — extract raw features directly from .mp4/.wav (use `invoke generate-wrangled-tokens` instead) |
+
+Live streaming is handled via `encoding/streaming/` (see `encoding/streaming/dispatch.py`).
 
 ### Other Directories
 
 - `src/data_wrangling/` — Video preprocessing pipeline (Seamless + CANDOR)
   - `candor/wrangle.py` — Extracts per-participant `.mp4`, `.wav`, and `.json` into `datasets/wrangled/C{part_num}/`
 - `tests/` — Full pytest test suite
+
+## Planned (Not Yet Implemented)
+
+The following research directions are described in design docs but have no implementation yet:
+
+- **Evidential embeddings** — Dempster-Shafer Theory for uncertainty-aware latent representations
+- **Supervised contrastive disentanglement phase** — label-guided Stage D after Stage C
+- **GAN discriminator** — adversarial alignment objective
+- **HGNN context management** — Heterogeneous Graph Neural Network for multi-turn session context
+- **Multi-agent latent space agents** — agent roles operating in shared 768-D space
 
 ## Critical Design Rules
 

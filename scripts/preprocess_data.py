@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # scripts/preprocess_data.py
+# DEPRECATED: Use `invoke generate-wrangled-tokens` for new work.
+#   This script operates on raw .mp4/.wav files directly and predates the
+#   wrangled-dataset pipeline. Prefer the invoke task for all new training runs.
+#
 # Run ONCE before training to extract raw features from all .mp4/.wav files.
 #
 # Saves to output_dir:
