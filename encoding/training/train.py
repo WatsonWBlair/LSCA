@@ -17,7 +17,7 @@ import torch.optim as optim
 from encoding.config import CAMELSConfig
 from encoding.adapters.registry import save_adapters
 from encoding.training.losses import (
-    all_pairs_nce, avae_loss, get_capacity,
+    all_pairs_nce, all_pairs_moco, avae_loss, get_capacity,
     cross_modal_orth_loss, variance_loss, covariance_loss,
     bidirectional_fm_loss, phoneme_probe_loss, monitor_nce_pairs,
 )
@@ -73,16 +73,24 @@ def _forward_batch(batch, adapters, cfg, device, stage):
     return result
 
 
-def _compute_losses(fwd, adapters, cfg, stage, epoch, stage_b_start, stage_b_end):
+def _compute_losses(
+    fwd, adapters, cfg, stage, epoch, stage_b_start, stage_b_end,
+    z_k_dict=None, momentum_manager=None,
+):
     """Compute all active losses for the current stage. Returns (total, losses_dict)."""
     tc = cfg.training
     losses = {}
 
-    # InfoNCE — always active
+    # Contrastive loss — MoCo if enabled, else InfoNCE
     z_v_for_nce = fwd.get("mu_v", fwd.get("z_v"))
     z_p_for_nce = fwd.get("mu_p", fwd.get("z_p"))
     z_dict = _get_z_dict(z_v_for_nce, fwd["z_ph_pooled"], z_p_for_nce, cfg)
-    l_nce, nce_pairs = all_pairs_nce(z_dict, temperature=tc.temperature)
+    if cfg.moco.enabled and z_k_dict is not None and momentum_manager is not None:
+        l_nce, nce_pairs = all_pairs_moco(
+            z_dict, z_k_dict, momentum_manager.queues, temperature=tc.temperature
+        )
+    else:
+        l_nce, nce_pairs = all_pairs_nce(z_dict, temperature=tc.temperature)
     losses["nce"] = l_nce
     losses.update(nce_pairs)
 
@@ -126,7 +134,7 @@ def _compute_losses(fwd, adapters, cfg, stage, epoch, stage_b_start, stage_b_end
     return total, losses
 
 
-def train_stage_a(train_loader, val_loader, adapters, cfg, device="cpu"):
+def train_stage_a(train_loader, val_loader, adapters, cfg, device="cpu", momentum_manager=None):
     """Stage A: contrastive alignment + geometric regularization."""
     tc = cfg.training
     os.makedirs(tc.checkpoint_dir, exist_ok=True)
@@ -149,12 +157,20 @@ def train_stage_a(train_loader, val_loader, adapters, cfg, device="cpu"):
         n_batches = 0
 
         for batch in train_loader:
+            z_k_dict = momentum_manager.encode_keys(batch, cfg, device, "A") if momentum_manager else None
             fwd = _forward_batch(batch, adapters, cfg, device, "A")
-            total, losses = _compute_losses(fwd, adapters, cfg, "A", epoch, 0, 0)
+            total, losses = _compute_losses(
+                fwd, adapters, cfg, "A", epoch, 0, 0,
+                z_k_dict=z_k_dict, momentum_manager=momentum_manager,
+            )
 
             optimizer.zero_grad()
             total.backward()
             optimizer.step()
+
+            if momentum_manager is not None:
+                momentum_manager.ema_update(adapters, cfg.moco.momentum)
+                momentum_manager.enqueue(z_k_dict)
 
             for k, v in losses.items():
                 epoch_losses[k] = epoch_losses.get(k, 0.0) + (v.item() if torch.is_tensor(v) else v)
@@ -175,7 +191,7 @@ def train_stage_a(train_loader, val_loader, adapters, cfg, device="cpu"):
     return history
 
 
-def train_stage_b(train_loader, val_loader, adapters, cfg, device="cpu"):
+def train_stage_b(train_loader, val_loader, adapters, cfg, device="cpu", momentum_manager=None):
     """Stage B: + AVAE reconstruction + L_orth + capacity control."""
     tc = cfg.training
     os.makedirs(tc.checkpoint_dir, exist_ok=True)
@@ -199,12 +215,20 @@ def train_stage_b(train_loader, val_loader, adapters, cfg, device="cpu"):
         n_batches = 0
 
         for batch in train_loader:
+            z_k_dict = momentum_manager.encode_keys(batch, cfg, device, "B") if momentum_manager else None
             fwd = _forward_batch(batch, adapters, cfg, device, "B")
-            total, losses = _compute_losses(fwd, adapters, cfg, "B", epoch, stage_b_start, stage_b_end)
+            total, losses = _compute_losses(
+                fwd, adapters, cfg, "B", epoch, stage_b_start, stage_b_end,
+                z_k_dict=z_k_dict, momentum_manager=momentum_manager,
+            )
 
             optimizer.zero_grad()
             total.backward()
             optimizer.step()
+
+            if momentum_manager is not None:
+                momentum_manager.ema_update(adapters, cfg.moco.momentum)
+                momentum_manager.enqueue(z_k_dict)
 
             for k, v in losses.items():
                 epoch_losses[k] = epoch_losses.get(k, 0.0) + (v.item() if torch.is_tensor(v) else v)
@@ -225,7 +249,7 @@ def train_stage_b(train_loader, val_loader, adapters, cfg, device="cpu"):
     return history
 
 
-def train_stage_c(train_loader, val_loader, adapters, cfg, device="cpu"):
+def train_stage_c(train_loader, val_loader, adapters, cfg, device="cpu", momentum_manager=None):
     """Stage C: + bidirectional flow matching (video <-> phoneme)."""
     tc = cfg.training
     os.makedirs(tc.checkpoint_dir, exist_ok=True)
@@ -259,8 +283,12 @@ def train_stage_c(train_loader, val_loader, adapters, cfg, device="cpu"):
         n_batches = 0
 
         for batch in train_loader:
+            z_k_dict = momentum_manager.encode_keys(batch, cfg, device, "C") if momentum_manager else None
             fwd = _forward_batch(batch, adapters, cfg, device, "C")
-            total, losses = _compute_losses(fwd, adapters, cfg, "B", epoch + tc.stage_b_epochs, stage_b_start, stage_b_end)
+            total, losses = _compute_losses(
+                fwd, adapters, cfg, "B", epoch + tc.stage_b_epochs, stage_b_start, stage_b_end,
+                z_k_dict=z_k_dict, momentum_manager=momentum_manager,
+            )
 
             # FM loss (adapters detached)
             l_fm = bidirectional_fm_loss(
@@ -276,6 +304,11 @@ def train_stage_c(train_loader, val_loader, adapters, cfg, device="cpu"):
             opt_adapters.zero_grad()
             total.backward(retain_graph=True)
             opt_adapters.step()
+
+            # EMA update after adapter step, before velocity step
+            if momentum_manager is not None:
+                momentum_manager.ema_update(adapters, cfg.moco.momentum)
+                momentum_manager.enqueue(z_k_dict)
 
             # Update VelocityNets with FM only
             opt_velocity.zero_grad()
@@ -316,9 +349,12 @@ def train_all_stages(
                 cfg.training.stage_a_epochs, cfg.training.stage_b_epochs, cfg.training.stage_c_epochs)
     logger.info("=" * 60)
 
-    hist_a = train_stage_a(train_loader, val_loader, adapters, cfg, device)
-    hist_b = train_stage_b(train_loader, val_loader, adapters, cfg, device)
-    hist_c = train_stage_c(train_loader, val_loader, adapters, cfg, device)
+    from encoding.training.momentum import MomentumEncoderManager
+    momentum_manager = MomentumEncoderManager(adapters, cfg, device) if cfg.moco.enabled else None
+
+    hist_a = train_stage_a(train_loader, val_loader, adapters, cfg, device, momentum_manager=momentum_manager)
+    hist_b = train_stage_b(train_loader, val_loader, adapters, cfg, device, momentum_manager=momentum_manager)
+    hist_c = train_stage_c(train_loader, val_loader, adapters, cfg, device, momentum_manager=momentum_manager)
 
     history = {"A": hist_a, "B": hist_b, "C": hist_c}
     with open(history_path, "w") as f:

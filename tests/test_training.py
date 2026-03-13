@@ -4,7 +4,9 @@
 import pytest
 import torch
 
-from encoding.config import CAMELSConfig, LatentConfig, TrainingConfig
+import torch.nn.functional as F
+
+from encoding.config import CAMELSConfig, LatentConfig, TrainingConfig, MoCoConfig
 from encoding.adapters.registry import build_adapters
 from encoding.training.train import (
     _forward_batch,
@@ -128,3 +130,52 @@ class TestStageTraining:
         # use of .detach() in bidirectional_fm_loss
         history = train_stage_c(fake_loader, fake_loader, train_adapters, train_cfg, device="cpu")
         assert "fm" in history[0]
+
+
+class TestMoCoIntegration:
+    def test_moco_queue_enqueue(self, train_cfg):
+        from encoding.training.momentum import MoCoQueue
+        d, K, B = train_cfg.latent.d_latent, 32, 4
+        q = MoCoQueue(d, K, "cpu")
+        keys = F.normalize(torch.randn(B, d), dim=-1)
+        q.enqueue_dequeue(keys)
+        assert q.queue.shape == (d, K)
+
+    def test_ema_update_shifts_params(self, train_cfg, train_adapters):
+        from encoding.training.momentum import MomentumEncoderManager
+        mgr = MomentumEncoderManager(train_adapters, train_cfg, "cpu")
+        # Record initial key params
+        init_params = {
+            k: [p.clone() for p in m.parameters()]
+            for k, m in mgr.key_adapters.items()
+        }
+        # Perturb query adapters
+        for mod in train_adapters.values():
+            for p in mod.parameters():
+                p.data.add_(torch.randn_like(p) * 0.1)
+        mgr.ema_update(train_adapters, m=0.9)
+        # At least one key adapter param should have shifted
+        shifted = False
+        for k, m in mgr.key_adapters.items():
+            for p_new, p_old in zip(m.parameters(), init_params[k]):
+                if not torch.allclose(p_new, p_old):
+                    shifted = True
+                    break
+        assert shifted
+
+    def test_stage_a_with_moco(self, fake_loader, train_adapters, train_cfg):
+        from encoding.training.momentum import MomentumEncoderManager
+        cfg = CAMELSConfig(
+            latent=train_cfg.latent,
+            training=TrainingConfig(
+                stage_a_epochs=1, stage_b_epochs=1, stage_c_epochs=1,
+                batch_size=4, eval_every=1,
+            ),
+            moco=MoCoConfig(enabled=True, queue_size=16),
+        )
+        mgr = MomentumEncoderManager(train_adapters, cfg, "cpu")
+        history = train_stage_a(
+            fake_loader, fake_loader, train_adapters, cfg, device="cpu", momentum_manager=mgr
+        )
+        assert len(history) == 1
+        assert history[0]["stage"] == "A"

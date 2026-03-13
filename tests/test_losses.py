@@ -7,6 +7,8 @@ import pytest
 from encoding.training.losses import (
     info_nce_loss,
     all_pairs_nce,
+    moco_loss,
+    all_pairs_moco,
     avae_loss,
     get_capacity,
     cross_modal_orth_loss,
@@ -220,6 +222,42 @@ class TestPhonemeProbe:
 
         loss = phoneme_probe_loss(z_ph, labels, mask, probe)
         assert loss.item() == 0.0
+
+
+class TestMoCoLoss:
+    def test_moco_loss_scalar(self):
+        d, B, K = 32, 4, 16
+        z_q = torch.randn(B, d, requires_grad=True)
+        z_k = torch.randn(B, d)
+        queue = torch.randn(d, K)
+        loss = moco_loss(z_q, z_k, queue)
+        assert loss.ndim == 0
+        loss.backward()
+        assert z_q.grad is not None
+        # z_k is detached inside moco_loss — no grad
+        assert z_k.grad is None
+
+    def test_all_pairs_moco_shape(self):
+        d, B, K = 32, 4, 16
+        z_q_dict = {
+            "video": torch.randn(B, d, requires_grad=True),
+            "phoneme": torch.randn(B, d, requires_grad=True),
+            "prosody": torch.randn(B, d, requires_grad=True),
+        }
+        z_k_dict = {
+            "video": torch.randn(B, d),
+            "phoneme": torch.randn(B, d),
+            "prosody": torch.randn(B, d),
+        }
+
+        class FakeQueue:
+            def __init__(self):
+                self.queue = torch.randn(d, K)
+
+        queues = {"video": FakeQueue(), "phoneme": FakeQueue(), "prosody": FakeQueue()}
+        total, per_pair = all_pairs_moco(z_q_dict, z_k_dict, queues)
+        assert total.ndim == 0
+        assert len(per_pair) == 6  # 3 modalities × 2 directions each
 
 
 class TestMonitorNCE:

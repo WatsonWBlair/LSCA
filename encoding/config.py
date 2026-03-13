@@ -74,6 +74,15 @@ class TrainingConfig:
 
 
 @dataclass
+class MoCoConfig:
+    """Momentum Contrast (MoCo) configuration for queue-based contrastive learning."""
+    enabled: bool = True
+    momentum: float = 0.999
+    queue_size: int = 4096
+    temperature: float = 0.07
+
+
+@dataclass
 class StreamingConfig:
     """Parameters for the live-streaming scheduler and ring buffers."""
     window_sec: float = 2.0
@@ -124,6 +133,7 @@ class CAMELSConfig:
     modality: ModalityConfig = field(default_factory=ModalityConfig)
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    moco: MoCoConfig = field(default_factory=MoCoConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
 

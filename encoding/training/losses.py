@@ -55,6 +55,56 @@ def all_pairs_nce(
     return total, per_pair
 
 
+# ── MoCo contrastive loss ───────────────────────────────────────────────────────
+
+def moco_loss(
+    z_q: torch.Tensor,
+    z_k: torch.Tensor,
+    queue: torch.Tensor,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """
+    MoCo contrastive loss (He et al. 2020).
+    z_q:   (B, d)  query embeddings — gradients flow here
+    z_k:   (B, d)  key embeddings   — detached inside
+    queue: (d, K)  negative key bank — detached inside
+    """
+    z_q = F.normalize(z_q, dim=-1)
+    z_k_norm = F.normalize(z_k.detach(), dim=-1)
+    queue_detached = queue.detach()
+
+    l_pos = (z_q * z_k_norm).sum(dim=-1, keepdim=True)   # (B, 1)
+    l_neg = torch.matmul(z_q, queue_detached)             # (B, K)
+    logits = torch.cat([l_pos, l_neg], dim=1) / temperature  # (B, K+1)
+    labels = torch.zeros(logits.shape[0], dtype=torch.long, device=z_q.device)
+    return F.cross_entropy(logits, labels)
+
+
+def all_pairs_moco(
+    z_q_dict: dict[str, torch.Tensor],
+    z_k_dict: dict[str, torch.Tensor],
+    queues: dict,
+    temperature: float = 0.07,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """
+    MoCo loss over all ordered pairs of enabled modalities.
+    6 directional losses for 3 modalities (A→B and B→A for each pair).
+    Returns: (total_loss, per_pair_dict)
+    """
+    names = sorted(z_q_dict.keys())
+    device = next(iter(z_q_dict.values())).device
+    total = torch.tensor(0.0, device=device)
+    per_pair: dict[str, torch.Tensor] = {}
+    for n1 in names:
+        for n2 in names:
+            if n1 == n2 or n2 not in queues:
+                continue
+            loss = moco_loss(z_q_dict[n1], z_k_dict[n2], queues[n2].queue, temperature)
+            per_pair[f"moco_{n1}_to_{n2}"] = loss
+            total = total + loss
+    return total, per_pair
+
+
 # ── AVAE loss with capacity-controlled KL ───────────────────────────────────────
 
 def avae_loss(
