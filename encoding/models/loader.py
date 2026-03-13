@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import torch
@@ -12,6 +13,30 @@ import torchaudio
 from encoding.config import CAMELSConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _build_vocab_lookup(model_name: str) -> dict[int, str]:
+    """Load vocab.json from HF cache and return reversed {id: ipa_str} dict."""
+    from transformers.utils import cached_file
+
+    path = cached_file(model_name, "vocab.json")
+    with open(path, encoding="utf-8") as f:
+        vocab: dict[str, int] = json.load(f)
+    return {v: k for k, v in vocab.items()}
+
+
+class _PhonemeDecoder:
+    """Wraps Wav2Vec2FeatureExtractor with a vocab-based decode() method."""
+
+    def __init__(self, feature_extractor, vocab: dict[int, str]) -> None:
+        self._fe = feature_extractor
+        self._vocab = vocab
+
+    def __call__(self, *a, **kw):
+        return self._fe(*a, **kw)
+
+    def decode(self, ids: list[int]) -> str:
+        return " ".join(self._vocab.get(i, str(i)) for i in ids).strip()
 
 
 def load_marlin(model_name: str, device: str = "cpu"):
@@ -46,6 +71,8 @@ def load_wav2vec2_ctc(model_name: str, device: str = "cpu") -> tuple:
     # Use FeatureExtractor only — avoids requiring espeak-ng system binary.
     # The phoneme string labels from processor.decode() are discarded downstream.
     processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+    vocab = _build_vocab_lookup(model_name)
+    processor = _PhonemeDecoder(processor, vocab)
     model = model.to(device).eval()
     for p in model.parameters():
         p.requires_grad_(False)

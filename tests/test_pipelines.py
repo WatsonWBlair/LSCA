@@ -5,6 +5,7 @@
 import numpy as np
 import pytest
 import torch
+from unittest.mock import MagicMock
 
 from encoding.config import CAMELSConfig, LatentConfig
 from encoding.adapters.base import TemporalAttentionPool
@@ -99,3 +100,28 @@ class TestPhonemePipelineHelpers:
 
         assert padded_embs.shape == (max_phones, d)
         assert padded_mask.sum() == 0
+
+
+class TestPhonemeDecoder:
+    def _make_decoder(self, vocab):
+        from encoding.models.loader import _PhonemeDecoder
+
+        fe = MagicMock()
+        return _PhonemeDecoder(fe, vocab), fe
+
+    def test_decode_returns_ipa(self):
+        decoder, _ = self._make_decoder({4: "n", 5: "s"})
+        assert decoder.decode([4, 5]) == "n s"
+
+    def test_decode_unknown_id_fallback(self):
+        decoder, _ = self._make_decoder({})
+        assert decoder.decode([999]) == "999"
+
+    def test_call_delegates(self):
+        mock_audio = np.zeros(16000, dtype=np.float32)
+        sentinel = object()
+        decoder, fe = self._make_decoder({})
+        fe.return_value = sentinel
+        result = decoder(mock_audio, sampling_rate=16000, return_tensors="pt")
+        fe.assert_called_once_with(mock_audio, sampling_rate=16000, return_tensors="pt")
+        assert result is sentinel

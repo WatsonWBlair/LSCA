@@ -88,7 +88,7 @@ def phoneme_pipeline(
     Args:
         audio_chunk: (T,) float32 at sample_rate Hz
         wav2vec2_ctc: frozen Wav2Vec2ForCTC model
-        wav2vec2_processor: Wav2Vec2Processor
+        wav2vec2_processor: _PhonemeDecoder | Wav2Vec2FeatureExtractor
         cfg: CAMELSConfig
         chunk_offset_sec: absolute start time of this chunk in the session (seconds).
                           Added to per-phoneme timestamps so the maintenance agent
