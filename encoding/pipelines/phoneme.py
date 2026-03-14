@@ -176,6 +176,87 @@ def phoneme_pipeline(
     return phone_embs, phone_labels, phone_mask, segments
 
 
+def batch_phoneme_pipeline(
+    audio_chunks: list[np.ndarray],
+    wav2vec2_ctc,
+    wav2vec2_processor,
+    cfg: CAMELSConfig,
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """
+    Batched phoneme pipeline — one wav2vec2 forward pass for B fixed-size chunks.
+
+    All chunks must be exactly sample_rate * window_sec samples (e.g. 32000).
+
+    Returns: list of (phone_embs, phone_labels, phone_mask) tuples, one per sample.
+    """
+    if not audio_chunks:
+        return []
+
+    d_phoneme = cfg.latent.d_phoneme
+    device = next(wav2vec2_ctc.parameters()).device
+    dtype = next(wav2vec2_ctc.parameters()).dtype
+
+    audio_batch = np.stack(audio_chunks)  # (B, T)
+    inputs = wav2vec2_processor(
+        list(audio_batch),
+        sampling_rate=cfg.streaming.sample_rate,
+        return_tensors="pt",
+        padding=False,
+    )
+    input_values = inputs.input_values.to(device=device, dtype=dtype)
+
+    with torch.no_grad():
+        outputs = wav2vec2_ctc(input_values, output_hidden_states=True)
+        logits = outputs.logits              # (B, T_frames, vocab_size)
+        hidden = outputs.hidden_states[-1]   # (B, T_frames, d_phoneme)
+
+    results = []
+    for i in range(len(audio_chunks)):
+        logits_i = logits[i].unsqueeze(0)   # (1, T_frames, vocab_size)
+        hidden_i = hidden[i].float().cpu()  # (T_frames, d_phoneme)
+
+        segments = _ctc_decode_with_boundaries(
+            logits_i, wav2vec2_processor,
+            chunk_offset_sec=0.0,
+            sample_rate=cfg.streaming.sample_rate,
+        )
+
+        if not segments:
+            results.append((
+                torch.zeros(0, d_phoneme),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.bool),
+            ))
+            continue
+
+        phone_embs_list = []
+        phone_labels_list = []
+        for seg in segments:
+            s, e = seg["start_frame"], seg["end_frame"]
+            if s >= hidden_i.shape[0]:
+                break
+            e = min(e, hidden_i.shape[0])
+            if e <= s:
+                continue
+            phone_embs_list.append(hidden_i[s:e].mean(dim=0))
+            phone_labels_list.append(seg["label_id"])
+
+        if phone_embs_list:
+            results.append((
+                torch.stack(phone_embs_list),
+                torch.tensor(phone_labels_list, dtype=torch.long),
+                torch.ones(len(phone_embs_list), dtype=torch.bool),
+            ))
+        else:
+            results.append((
+                torch.zeros(0, d_phoneme),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.bool),
+            ))
+
+    return results
+
+
 def pad_phonemes(
     phone_embs: torch.Tensor,
     phone_labels: torch.Tensor,

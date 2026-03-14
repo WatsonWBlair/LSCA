@@ -100,6 +100,42 @@ def video_pipeline(
     return temporal_pool(H)                            # (d_video,)
 
 
+def batch_video_pipeline(
+    frame_lists: list[list[torch.Tensor]],
+    fps: float,
+    marlin_model,
+    temporal_pool,
+    cfg: CAMELSConfig,
+) -> torch.Tensor:
+    """
+    Batched video pipeline — one MARLIN forward pass for B chunks.
+
+    Each item in frame_lists is a list of (3, 224, 224) tensors for one chunk.
+    Uses uniform_sample (single window) to downsample each chunk to marlin_frames.
+
+    Returns: (B, d_video) float tensor on CPU.
+    """
+    if not frame_lists:
+        return torch.zeros(0, cfg.latent.d_video)
+
+    n = cfg.streaming.marlin_frames
+    frame_size = cfg.streaming.marlin_size
+    device = next(marlin_model.parameters()).device
+    dtype = next(marlin_model.parameters()).dtype
+
+    sampled = [torch.stack(uniform_sample(frames, n, frame_size)) for frames in frame_lists]
+    x_batch = torch.stack(sampled)              # (B, 16, 3, 224, 224)
+    x_batch = x_batch.permute(0, 2, 1, 3, 4)   # (B, 3, 16, 224, 224)
+    x_batch = x_batch.to(device=device, dtype=dtype)
+
+    with torch.no_grad():
+        feats = marlin_model.extract_features(x_batch, keep_seq=False)  # (B, 768)
+    feats = feats.float().cpu()
+
+    results = [temporal_pool(feats[i].unsqueeze(0)) for i in range(feats.shape[0])]
+    return torch.stack(results)  # (B, d_video)
+
+
 def extract_video_file(
     video_path: str,
     marlin_model,
