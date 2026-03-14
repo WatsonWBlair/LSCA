@@ -163,18 +163,57 @@ def eval_kl_per_modality(
     return {f"kl_{name}": float(np.mean(vals)) for name, vals in kl.items() if vals}
 
 
-def eval_cross_modal_redundancy(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
-    """Cross-correlation norm between modality pairs. Target: mean < 5.0 after Stage B."""
+def eval_modality_recovery(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Train a linear probe to predict modality identity from embeddings.
+    In a perfectly disentangled space no dimension should encode modality — target ≈ 33%.
+    Higher accuracy means more modality-identity information leaking into the shared space.
+    """
+    from sklearn.linear_model import LogisticRegression
+    import warnings
+
+    names = sorted(z_dict.keys())
+    if len(names) < 2:
+        return {}
+
+    parts = []
+    labels = []
+    for idx, name in enumerate(names):
+        z = z_dict[name].detach().cpu().numpy()
+        parts.append(z)
+        labels.extend([idx] * len(z))
+
+    X = np.concatenate(parts, axis=0)
+    y = np.array(labels)
+    chance = 1.0 / len(names)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        clf = LogisticRegression(max_iter=200, C=1.0, solver="lbfgs", multi_class="auto")
+        clf.fit(X, y)
+        acc = clf.score(X, y)
+
+    return {
+        "modality_recovery_acc": float(acc),
+        "modality_recovery_above_chance": float(acc - chance),
+    }
+
+
+def eval_cross_modal_mi_proxy(z_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Normalized cross-correlation proxy for mutual information between modality pairs.
+    Uses ||C_ij||_F / (d * sqrt(B)) so values are comparable across batch sizes.
+    Target: mean < 0.1 after Stage B. Lower = more disentangled.
+    """
     names = sorted(z_dict.keys())
     results = {}
     for n1, n2 in combinations(names, 2):
         z1 = z_dict[n1]
         z2 = z_dict[n2]
+        B, d = z1.shape[0], z1.shape[1]
         z1c = F.normalize(z1 - z1.mean(0), dim=0)
         z2c = F.normalize(z2 - z2.mean(0), dim=0)
-        C = torch.mm(z1c.T, z2c) / z1c.shape[0]
-        results[f"redundancy_{n1}_{n2}"] = C.norm().item()
-    results["redundancy_mean"] = float(np.mean([v for k, v in results.items() if k != "redundancy_mean"]))
+        C = torch.mm(z1c.T, z2c) / B
+        results[f"mi_proxy_{n1}_{n2}"] = (C.norm() / (d * (B ** 0.5))).item()
+    results["mi_proxy_mean"] = float(np.mean([v for k, v in results.items() if k != "mi_proxy_mean"]))
     return results
 
 
@@ -261,11 +300,13 @@ def run_evaluation(
     metrics.update(eval_dimension_utilization(z_dict, cfg.latent.d_latent))
     metrics.update(eval_phoneme_probe_accuracy(val_loader, adapters, device))
 
+    metrics.update(eval_modality_recovery(z_dict))
+
     if stage in ("B", "C"):
         metrics.update(eval_reconstruction_mse(val_loader, adapters, cfg, device))
         metrics.update(eval_kl_per_modality(val_loader, adapters, device))
         metrics.update(eval_uniformity_all(z_dict))
-        metrics.update(eval_cross_modal_redundancy(z_dict))
+        metrics.update(eval_cross_modal_mi_proxy(z_dict))
 
     logger.info(
         "[Stage %s] intra=%.3f  R@1(v->ph)=%.3f",
