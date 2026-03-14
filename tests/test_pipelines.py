@@ -2,9 +2,11 @@
 # Pipeline output shape tests with mock encoders.
 # These tests verify pipeline logic WITHOUT requiring real models.
 
+import json
 import numpy as np
 import pytest
 import torch
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from encoding.config import CAMELSConfig, LatentConfig
@@ -100,6 +102,69 @@ class TestPhonemePipelineHelpers:
 
         assert padded_embs.shape == (max_phones, d)
         assert padded_mask.sum() == 0
+
+
+class TestLoadLabels:
+    def _write_json(self, tmp_path: Path, data: dict) -> Path:
+        p = tmp_path / "sample.json"
+        p.write_text(json.dumps(data))
+        return p
+
+    def test_load_labels_candor(self, tmp_path):
+        from scripts.generate_wrangled_tokens import load_labels
+
+        survey = {"user_id": "u1", "age": "30"}
+        data = {
+            "id": "CANDOR_abc_u1",
+            "source": "candor",
+            "metadata:vad": [{"start": 0.0, "end": 1.0}],
+            "metadata:survey": survey,
+        }
+        path = self._write_json(tmp_path, data)
+        vad, words, avf, im, sl, base_meta = load_labels(path)
+        assert base_meta["source_id"] == "CANDOR_abc_u1"
+        assert base_meta["source"] == "candor"
+        assert base_meta["survey"] == survey
+        assert vad == [{"start": 0.0, "end": 1.0}]
+
+    def test_load_labels_cmu_mosei(self, tmp_path):
+        from scripts.generate_wrangled_tokens import load_labels
+
+        labels = {"sentiment": [0, 1, 0]}
+        data = {
+            "id": "mosei_clip_001",
+            "source": "cmu_mosei",
+            "metadata:labels": labels,
+        }
+        path = self._write_json(tmp_path, data)
+        _, _, _, _, segment_labels, base_meta = load_labels(path)
+        assert base_meta["source"] == "cmu_mosei"
+        assert base_meta["source_id"] == "mosei_clip_001"
+        assert segment_labels == labels
+
+    def test_load_labels_seamless(self, tmp_path):
+        from scripts.generate_wrangled_tokens import load_labels
+
+        data = {
+            "session_id": "S0172",
+            "session_interaction_idx": 3,
+            "session_total_interactions": 10,
+        }
+        path = self._write_json(tmp_path, data)
+        _, _, _, _, _, base_meta = load_labels(path)
+        assert base_meta == {}
+
+    def test_load_labels_empty(self, tmp_path):
+        from scripts.generate_wrangled_tokens import load_labels
+
+        path = self._write_json(tmp_path, {})
+        vad, words, avf, im, sl, base_meta = load_labels(path)
+        assert vad == []
+        assert words == []
+        assert avf == []
+        assert im == {}
+        assert sl == {}
+        assert base_meta == {}
 
 
 class TestPhonemeDecoder:

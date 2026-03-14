@@ -208,6 +208,7 @@ def wrangle_conversation(conv_dir: Path, part_num: str, wrangled_root: Path) -> 
 
         record = {
             "id": f"CANDOR_{conv_uuid}_{user_id}",
+            "source": "candor",
             "metadata:vad": extract_vad(conv_dir, user_id),
             "metadata:transcript": extract_transcript(conv_dir, user_id, metadata),
             "metadata:survey": extract_survey(conv_dir, user_id),

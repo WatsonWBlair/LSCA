@@ -232,8 +232,8 @@ _SESSION_META_FIELDS = (
 )
 
 
-def load_labels(json_path: Path) -> tuple[list, list, list, dict, dict]:
-    """Load VAD segments, transcript words, AVF entries, interaction metadata, and segment labels from wrangled JSON."""
+def load_labels(json_path: Path) -> tuple[list, list, list, dict, dict, dict]:
+    """Load VAD segments, transcript words, AVF entries, interaction metadata, segment labels, and base metadata from wrangled JSON."""
     with open(json_path) as f:
         data = json.load(f)
     vad_segs = data.get("metadata:vad", [])
@@ -244,7 +244,15 @@ def load_labels(json_path: Path) -> tuple[list, list, list, dict, dict]:
     avf_entries = data.get("metadata:audio_video_features", [])
     interaction_meta = {k: data[k] for k in _SESSION_META_FIELDS if k in data}
     segment_labels = data.get("metadata:labels", {})
-    return vad_segs, transcript_segs, avf_entries, interaction_meta, segment_labels
+    base_meta = {}
+    if "id" in data:
+        base_meta["source_id"] = data["id"]
+    if "source" in data:
+        base_meta["source"] = data["source"]
+    survey = data.get("metadata:survey")
+    if survey:
+        base_meta["survey"] = survey
+    return vad_segs, transcript_segs, avf_entries, interaction_meta, segment_labels, base_meta
 
 
 def chunk_labels(
@@ -425,7 +433,7 @@ def main():
             tri_idx + 1, len(triplets), session_name, stem_name,
         )
 
-        vad_segs, word_list, avf_entries, interaction_meta, segment_labels = load_labels(json_path)
+        vad_segs, word_list, avf_entries, interaction_meta, segment_labels, base_meta = load_labels(json_path)
         convo_id = extract_convo_id(stem_name)
         partner_stem = partner_map.get(str(mp4_path))
 
@@ -470,6 +478,7 @@ def main():
                         "end_sec": round(end_sec, 4),
                         **lbl,
                         **interaction_meta,
+                        **base_meta,
                     }
                     if segment_labels:
                         record["segment_labels"] = segment_labels

@@ -83,6 +83,8 @@ def _process_npz(npz_path: Path, extra_fields: dict | None = None) -> bool:
             if ext == '.json' and extra_fields:
                 with open(src, encoding='utf-8') as f:
                     data = json.load(f)
+                extra_fields["source"] = "seamless_interaction"
+                extra_fields["id"] = f"seamless_interaction_{short_name}"
                 data.update(extra_fields)
                 with open(dst, 'w', encoding='utf-8') as f:
                     json.dump(data, f)
