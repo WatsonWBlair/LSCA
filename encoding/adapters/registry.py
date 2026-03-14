@@ -9,7 +9,7 @@ import logging
 import torch
 
 from encoding.config import CAMELSConfig
-from encoding.adapters.base import AVAEAdapter, TemporalAttentionPool
+from encoding.adapters.base import AVAEAdapter, PhonemeDecoder, TemporalAttentionPool
 from encoding.adapters.phoneme import PhonemeAdapter, PhonemeAttnPool, PhonemeProbeHead
 from encoding.adapters.velocity import VelocityNet
 
@@ -41,6 +41,11 @@ def build_adapters(cfg: CAMELSConfig) -> dict:
                 d_in=lat.d_phoneme, d_latent=lat.d_latent,
             )
             adapters["phoneme_attn_pool"] = PhonemeAttnPool(d=lat.d_latent)
+            adapters["phoneme_decoder"] = PhonemeDecoder(
+                d_latent=lat.d_latent,
+                d_phoneme=lat.d_phoneme,
+                hidden=adp.hidden_high,
+            )
             if lat.num_phoneme_classes > 0:
                 adapters["phoneme_probe"] = PhonemeProbeHead(
                     d=lat.d_latent,

@@ -12,6 +12,7 @@ import logging
 import os
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 
 from encoding.config import CAMELSConfig
@@ -77,6 +78,10 @@ def _forward_batch(batch, adapters, cfg, device, stage):
             z_ph_seq = adapters["phoneme_adapter"](ph_raw)          # (B, MAX, d_latent)
             z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)  # (B, d_latent)
             result.update({"z_ph_seq": z_ph_seq, "z_ph_pooled": z_ph_pooled})
+            if stage in ("B", "C"):
+                mask_f = ph_mask.float().unsqueeze(-1)
+                ph_pooled_for_recon = (ph_raw * mask_f).sum(1) / mask_f.sum(1).clamp(min=1)
+                result["ph_pooled_for_recon"] = ph_pooled_for_recon
 
     # Prosody
     if stage == "A":
@@ -157,7 +162,14 @@ def _compute_losses(
         # L_orth
         losses["orth"] = cross_modal_orth_loss(z_list)
 
-        total = total + l_avae + tc.lambda_orth * losses["orth"]
+        # Phoneme decoder reconstruction (linear adapter path only)
+        if "phoneme_decoder" in adapters and "ph_pooled_for_recon" in fwd:
+            ph_hat = adapters["phoneme_decoder"](fwd["z_ph_pooled"])
+            losses["recon_phoneme"] = F.mse_loss(ph_hat, fwd["ph_pooled_for_recon"])
+        else:
+            losses["recon_phoneme"] = torch.tensor(0.0, device=l_nce.device)
+
+        total = total + l_avae + tc.lambda_orth * losses["orth"] + losses["recon_phoneme"]
 
     return total, losses
 

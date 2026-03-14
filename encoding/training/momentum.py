@@ -49,7 +49,7 @@ class MomentumEncoderManager:
     Excluded adapters (not momentum-tracked): velocity_*, phoneme_probe, temporal_pool.
     """
 
-    _EXCLUDE = {"velocity_vph", "velocity_phv", "phoneme_probe", "temporal_pool"}
+    _EXCLUDE = {"velocity_vph", "velocity_phv", "phoneme_probe", "phoneme_decoder", "temporal_pool"}
 
     def __init__(self, adapters: dict, cfg: CAMELSConfig, device: torch.device | str):
         self.cfg = cfg

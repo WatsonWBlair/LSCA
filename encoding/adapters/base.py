@@ -78,6 +78,19 @@ class AVAEAdapter(nn.Module):
         return self.decoder(z)
 
 
+class PhonemeDecoder(nn.Module):
+    """Reconstructs mean-pooled phoneme backbone features from z_ph_pooled.
+    Used in Stage B+ to add reconstruction pressure to the linear phoneme adapter.
+    """
+
+    def __init__(self, d_latent: int, d_phoneme: int, hidden: int):
+        super().__init__()
+        self.net = MLP([d_latent, hidden, d_phoneme], norm="layernorm")
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        return self.net(z)
+
+
 class TemporalAttentionPool(nn.Module):
     """
     Collapses (W, d) MARLIN window embeddings to (d,) per chunk
