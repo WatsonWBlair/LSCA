@@ -109,11 +109,11 @@ def run_ablations_task(c, feature_dir="datasets/pregenerated", device="cpu", dry
 
 
 @task(name="consolidate-pregenerated")
-def consolidate_pregenerated_task(c, backbone_tag="marlin-vit-base-ytf__wav2vec2-lv-60-espea"):
+def consolidate_pregenerated_task(c, backbone_tag="marlin-vit-base-ytf__wav2vec2-lv-60-espea", workers=3):
     """Consolidate per-stem pregenerated .npy files into flat mmap files for training."""
     pregen = f"datasets/pregenerated/{backbone_tag}"
     output = f"datasets/consolidated/{backbone_tag}"
-    c.run(f"python scripts/consolidate_pregenerated.py --pregen-dir {pregen} --output-dir {output}")
+    c.run(f"python scripts/consolidate_pregenerated.py --pregen-dir {pregen} --output-dir {output} --workers {workers}")
 
 
 @task(name="generate-wrangled-tokens")
