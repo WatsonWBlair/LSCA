@@ -22,7 +22,9 @@ import argparse
 import json
 import logging
 import os
+import queue
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +59,10 @@ def parse_args():
                    help="cpu | cuda | mps (default: cpu)")
     p.add_argument("--max-pairs",     default=None, type=int,
                    help="Limit pairs for debugging (default: None)")
+    p.add_argument("--batch-size",    default=32, type=int,
+                   help="Chunks per inference batch (default: 32)")
+    p.add_argument("--num-workers",   default=6, type=int,
+                   help="CPU preprocessing threads (default: 6)")
     return p.parse_args()
 
 
@@ -328,15 +334,24 @@ def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
     video_win    = int(cfg.streaming.window_sec * video_fps)
     video_stride = int(cfg.streaming.stride_sec * video_fps)
 
-    # Prime the deque with the first window's worth of frames
+    # Decode only every n_sub-th frame — uniform_sample picks evenly anyway,
+    # so decoding all frames is wasteful. n_sub ≈ video_win / marlin_frames.
+    n_sub = max(1, video_win // cfg.streaming.marlin_frames)
+    video_win_sub    = max(1, video_win // n_sub)
+    video_stride_sub = max(1, video_stride // n_sub)
+
+    # Prime the deque with video_win_sub subsampled frames
     frame_buffer: deque[torch.Tensor] = deque()
+    frame_counter = 0
     eof = False
-    while len(frame_buffer) < video_win:
+    while len(frame_buffer) < video_win_sub:
         ret, bgr = cap.read()
         if not ret:
             eof = True
             break
-        frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
+        if frame_counter % n_sub == 0:
+            frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
+        frame_counter += 1
 
     if not frame_buffer:
         cap.release()
@@ -347,13 +362,13 @@ def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
     chunk_id = 0
 
     while audio_start + audio_win <= len(waveform):
-        if len(frame_buffer) < video_win and eof:
+        if len(frame_buffer) < video_win_sub and eof:
             break
 
         start_sec = audio_start / cfg.streaming.sample_rate
         end_sec   = (audio_start + audio_win) / cfg.streaming.sample_rate
         yield (
-            list(frame_buffer)[:video_win],
+            list(frame_buffer)[:video_win_sub],
             waveform[audio_start : audio_start + audio_win],
             video_fps,
             chunk_id,
@@ -361,14 +376,18 @@ def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
             end_sec,
         )
 
-        # Advance: read video_stride new frames, drop video_stride old ones
-        for _ in range(video_stride):
+        # Advance: read real frames until video_stride_sub new subsampled frames collected
+        new_sub = 0
+        while new_sub < video_stride_sub:
             ret, bgr = cap.read()
             if not ret:
                 eof = True
                 break
-            frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
-        for _ in range(min(video_stride, len(frame_buffer))):
+            if frame_counter % n_sub == 0:
+                frame_buffer.append(_preprocess_frame(bgr, marlin_size, im_mean, im_std))
+                new_sub += 1
+            frame_counter += 1
+        for _ in range(min(video_stride_sub, len(frame_buffer))):
             frame_buffer.popleft()
 
         audio_start += audio_stride
@@ -377,15 +396,176 @@ def iter_chunks(mp4_path: Path, wav_path: Path, cfg):
     cap.release()
 
 
+def _stem_worker(mp4_path, wav_path, json_path, partner_map, cfg, work_queue):
+    """Per-stem CPU preprocessing worker. Pushes chunk items + sentinel to work_queue."""
+    from encoding.pipelines.prosody import extract_prosody_raw
+
+    stem_key = str(mp4_path)
+    stem_name = mp4_path.stem
+    count = 0
+
+    try:
+        vad_segs, word_list, avf_entries, interaction_meta, segment_labels, base_meta = (
+            load_labels(json_path)
+        )
+        convo_id = extract_convo_id(stem_name)
+        partner_stem = partner_map.get(stem_key)
+
+        npz_path = mp4_path.with_suffix(".npz")
+        seamless_emotion = load_seamless_emotion_data(npz_path)
+        is_seamless = bool(seamless_emotion) or npz_path.exists()
+
+        for chunk_frames, audio_chunk, fps_i, chunk_id, start_sec, end_sec in iter_chunks(
+            mp4_path, wav_path, cfg
+        ):
+            prosody = extract_prosody_raw(
+                audio_chunk,
+                sr=cfg.streaming.sample_rate,
+                d_prosody=cfg.latent.d_prosody,
+            )
+            lbl = chunk_labels(vad_segs, word_list, start_sec, end_sec)
+            record = {
+                "chunk_id": chunk_id,
+                "start_sec": round(start_sec, 4),
+                "end_sec": round(end_sec, 4),
+                **lbl,
+                **interaction_meta,
+                **base_meta,
+            }
+            if segment_labels:
+                record["segment_labels"] = segment_labels
+            if convo_id:
+                record["convo_id"] = convo_id
+            if partner_stem:
+                record["partner_stem"] = partner_stem
+
+            fau_mean = None
+            if seamless_emotion:
+                emotion_fields, fau_mean = chunk_seamless_emotion(
+                    seamless_emotion, start_sec, end_sec, fps_i
+                )
+                record.update(emotion_fields)
+            elif avf_entries:
+                record.update(chunk_candor_emotion(avf_entries, start_sec, end_sec))
+
+            work_queue.put({
+                "stem_key": stem_key,
+                "frame_list": chunk_frames,
+                "audio_chunk": audio_chunk,
+                "fps": fps_i,
+                "prosody": prosody,
+                "record": record,
+                "fau_mean": fau_mean,
+                "is_seamless": is_seamless,
+            })
+            count += 1
+
+    except Exception as e:
+        logger.error("Worker error for %s: %s", stem_key, e)
+    finally:
+        work_queue.put({"stem_key": stem_key, "done": True, "count": count})
+
+
+def _flush_batch(batch_buf, stem_states, marlin_model, temporal_pool,
+                 wav2vec2_ctc, wav2vec2_proc, cfg):
+    """Run GPU inference on batch_buf and append results to per-stem state."""
+    from encoding.pipelines.video import batch_video_pipeline
+    from encoding.pipelines.phoneme import pad_phonemes, batch_phoneme_pipeline
+
+    if not batch_buf:
+        return
+
+    frame_lists = [item["frame_list"] for item in batch_buf]
+    audio_chunks = [item["audio_chunk"] for item in batch_buf]
+    fps_val = batch_buf[0]["fps"]
+
+    try:
+        v_batch = batch_video_pipeline(frame_lists, fps_val, marlin_model, temporal_pool, cfg)
+        ph_batch = batch_phoneme_pipeline(audio_chunks, wav2vec2_ctc, wav2vec2_proc, cfg)
+    except Exception as e:
+        logger.warning("Batch inference failed: %s — skipping %d items", e, len(batch_buf))
+        batch_buf.clear()
+        return
+
+    for i, item in enumerate(batch_buf):
+        sk = item["stem_key"]
+        state = stem_states[sk]
+        try:
+            v = v_batch[i]
+            embs, labels, mask = ph_batch[i]
+            padded_embs, padded_labels, padded_mask = pad_phonemes(
+                embs, labels, mask,
+                cfg.latent.max_phones, cfg.latent.d_phoneme,
+            )
+            # Open jsonl lazily on first chunk for this stem
+            if state["jsonl_fh"] is None:
+                state["out_dir"].mkdir(parents=True, exist_ok=True)
+                state["jsonl_fh"] = open(state["out_dir"] / "chunks.jsonl", "w")
+
+            # Atomic write: numpy lists + jsonl in same try block (Row-N invariant)
+            state["v_rows"].append(v.detach().cpu().numpy())
+            state["ph_rows"].append(padded_embs.detach().cpu().numpy())
+            state["ph_label_rows"].append(padded_labels.detach().cpu().numpy())
+            state["ph_mask_rows"].append(padded_mask.detach().cpu().numpy())
+            state["p_rows"].append(item["prosody"])
+
+            if item["is_seamless"]:
+                fau_mean = item["fau_mean"]
+                state["fau_rows"].append(
+                    fau_mean if fau_mean is not None else np.zeros(24, dtype=np.float32)
+                )
+
+            state["jsonl_fh"].write(json.dumps(item["record"]) + "\n")
+            state["processed"] += 1
+
+        except Exception as e:
+            logger.warning("Item error in %s chunk %d: %s",
+                           sk, item["record"].get("chunk_id", "?"), e)
+
+    batch_buf.clear()
+
+
+def _try_save_complete(stem_states, sessions_processed):
+    """Save arrays and close jsonl for any stem where processed == expected.
+
+    Returns the number of chunks written across all newly completed stems.
+    """
+    done_keys = []
+    total = 0
+    for sk, state in stem_states.items():
+        if state["expected"] is None or state["processed"] != state["expected"]:
+            continue
+        if state["processed"] == 0:
+            logger.warning(
+                "No chunks from %s/%s — skipping save",
+                state["session_name"], state["stem_name"],
+            )
+        else:
+            out_dir = state["out_dir"]
+            np.save(str(out_dir / "v_raw.npy"),     np.stack(state["v_rows"]))
+            np.save(str(out_dir / "ph_raw.npy"),    np.stack(state["ph_rows"]))
+            np.save(str(out_dir / "ph_labels.npy"), np.stack(state["ph_label_rows"]))
+            np.save(str(out_dir / "ph_mask.npy"),   np.stack(state["ph_mask_rows"]))
+            np.save(str(out_dir / "p_raw.npy"),     np.stack(state["p_rows"]))
+            if state["is_seamless"] and state["fau_rows"]:
+                np.save(str(out_dir / "fau.npy"), np.stack(state["fau_rows"]))
+            logger.info("  → %d chunks saved to %s", state["processed"], out_dir)
+            sessions_processed.append(f"{state['session_name']}/{state['stem_name']}")
+            total += state["processed"]
+        if state["jsonl_fh"] is not None:
+            state["jsonl_fh"].close()
+        done_keys.append(sk)
+    for sk in done_keys:
+        del stem_states[sk]
+    return total
+
+
 def main():
     args = parse_args()
 
     from encoding.config import CAMELSConfig
     from encoding.models.loader import load_all_models
     from encoding.adapters.registry import build_adapters
-    from encoding.pipelines.video import video_pipeline
-    from encoding.pipelines.phoneme import phoneme_pipeline, pad_phonemes
-    from encoding.pipelines.prosody import extract_prosody_raw
 
     cfg = CAMELSConfig()
     backbone_tag = make_backbone_tag(cfg)
@@ -413,117 +593,109 @@ def main():
     partner_map = build_partner_map(triplets)
     logger.info("Dyadic partner map: %d matched stems", len(partner_map))
 
-    sessions_processed: list[str] = []
-    total_chunks = 0
-    skipped_existing = 0
-
-    for tri_idx, (mp4_path, wav_path, json_path) in enumerate(triplets):
-        session_name = mp4_path.parent.name       # e.g. S0172
-        stem_name    = mp4_path.stem              # e.g. I00001226_P1316
+    # Build lookup: stem_key -> (session_name, stem_name, out_dir)
+    triplet_lookup: dict[str, tuple[str, str, Path]] = {}
+    for mp4_path, _, _ in triplets:
+        session_name = mp4_path.parent.name
+        stem_name = mp4_path.stem
         out_dir = tag_root / session_name / stem_name
-        out_dir.mkdir(parents=True, exist_ok=True)
+        triplet_lookup[str(mp4_path)] = (session_name, stem_name, out_dir)
 
+    # Filter already-processed stems before submitting workers
+    skipped_existing = 0
+    non_skipped_triplets = []
+    for tri_idx, (mp4_path, wav_path, json_path) in enumerate(triplets):
+        _, _, out_dir = triplet_lookup[str(mp4_path)]
         if (out_dir / "v_raw.npy").exists():
+            session_name, stem_name, _ = triplet_lookup[str(mp4_path)]
             logger.info("Skipping %d/%d: %s/%s (already processed)",
                         tri_idx + 1, len(triplets), session_name, stem_name)
             skipped_existing += 1
-            continue
+        else:
+            non_skipped_triplets.append((mp4_path, wav_path, json_path))
+
+    sessions_processed: list[str] = []
+    total_chunks = 0
+
+    if not non_skipped_triplets:
+        logger.info("All stems already processed.")
+    else:
+        work_queue: queue.Queue = queue.Queue(
+            maxsize=args.num_workers * args.batch_size * 2
+        )
+        # stem_states: keyed by str(mp4_path), lazily initialized on first data item
+        stem_states: dict[str, dict] = {}
+        pending_sentinels = {str(mp4) for mp4, _, _ in non_skipped_triplets}
+        batch_buf: list[dict] = []
 
         logger.info(
-            "Processing %d/%d: %s/%s",
-            tri_idx + 1, len(triplets), session_name, stem_name,
+            "Submitting %d stems to %d worker threads (batch_size=%d) ...",
+            len(non_skipped_triplets), args.num_workers, args.batch_size,
         )
 
-        vad_segs, word_list, avf_entries, interaction_meta, segment_labels, base_meta = load_labels(json_path)
-        convo_id = extract_convo_id(stem_name)
-        partner_stem = partner_map.get(str(mp4_path))
+        with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+            for mp4_path, wav_path, json_path in non_skipped_triplets:
+                executor.submit(
+                    _stem_worker, mp4_path, wav_path, json_path,
+                    partner_map, cfg, work_queue,
+                )
 
-        npz_path = mp4_path.with_suffix(".npz")
-        seamless_emotion = load_seamless_emotion_data(npz_path)
-        is_seamless = bool(seamless_emotion) or npz_path.exists()
-
-        v_rows, ph_rows, ph_label_rows, ph_mask_rows, p_rows = [], [], [], [], []
-        fau_rows: list = []
-        pair_chunks = 0
-
-        jsonl_path = out_dir / "chunks.jsonl"
-        with open(jsonl_path, "w") as jsonl_fh:
-            for chunk_frames, audio_chunk, fps, chunk_id, start_sec, end_sec in iter_chunks(
-                mp4_path, wav_path, cfg
-            ):
+            # Consumer loop: drain work_queue, batch GPU inference, save completed stems
+            while pending_sentinels or batch_buf:
                 try:
-                    v = video_pipeline(chunk_frames, fps, marlin_model, temporal_pool, cfg)
-                    embs, labels, mask, _ = phoneme_pipeline(
-                        audio_chunk, wav2vec2_ctc, wav2vec2_proc, cfg,
-                    )
-                    padded_embs, padded_labels, padded_mask = pad_phonemes(
-                        embs, labels, mask,
-                        cfg.latent.max_phones, cfg.latent.d_phoneme,
-                    )
-                    p = extract_prosody_raw(
-                        audio_chunk,
-                        sr=cfg.streaming.sample_rate,
-                        d_prosody=cfg.latent.d_prosody,
-                    )
-
-                    v_rows.append(v.detach().cpu().numpy())
-                    ph_rows.append(padded_embs.detach().cpu().numpy())
-                    ph_label_rows.append(padded_labels.detach().cpu().numpy())
-                    ph_mask_rows.append(padded_mask.detach().cpu().numpy())
-                    p_rows.append(p)
-
-                    lbl = chunk_labels(vad_segs, word_list, start_sec, end_sec)
-                    record = {
-                        "chunk_id": chunk_id,
-                        "start_sec": round(start_sec, 4),
-                        "end_sec": round(end_sec, 4),
-                        **lbl,
-                        **interaction_meta,
-                        **base_meta,
-                    }
-                    if segment_labels:
-                        record["segment_labels"] = segment_labels
-                    if convo_id:
-                        record["convo_id"] = convo_id
-                    if partner_stem:
-                        record["partner_stem"] = partner_stem
-
-                    if seamless_emotion:
-                        emotion_fields, fau_mean = chunk_seamless_emotion(
-                            seamless_emotion, start_sec, end_sec, fps
+                    item = work_queue.get(timeout=5.0)
+                except queue.Empty:
+                    if batch_buf:
+                        _flush_batch(
+                            batch_buf, stem_states,
+                            marlin_model, temporal_pool,
+                            wav2vec2_ctc, wav2vec2_proc, cfg,
                         )
-                        record.update(emotion_fields)
-                        fau_rows.append(
-                            fau_mean if fau_mean is not None
-                            else np.zeros(24, dtype=np.float32)
+                        total_chunks += _try_save_complete(stem_states, sessions_processed)
+                    if not pending_sentinels:
+                        break
+                    continue
+
+                sk = item["stem_key"]
+
+                if item.get("done"):
+                    stem_states.setdefault(sk, {
+                        "v_rows": [], "ph_rows": [], "ph_label_rows": [],
+                        "ph_mask_rows": [], "p_rows": [], "fau_rows": [],
+                        "jsonl_fh": None,
+                        "expected": None,
+                        "processed": 0,
+                        "out_dir": triplet_lookup[sk][2],
+                        "session_name": triplet_lookup[sk][0],
+                        "stem_name": triplet_lookup[sk][1],
+                        "is_seamless": False,
+                    })
+                    stem_states[sk]["expected"] = item["count"]
+                    pending_sentinels.discard(sk)
+                    total_chunks += _try_save_complete(stem_states, sessions_processed)
+                else:
+                    # Lazily init state on first data item for this stem
+                    if sk not in stem_states:
+                        session_name, stem_name, out_dir = triplet_lookup[sk]
+                        stem_states[sk] = {
+                            "v_rows": [], "ph_rows": [], "ph_label_rows": [],
+                            "ph_mask_rows": [], "p_rows": [], "fau_rows": [],
+                            "jsonl_fh": None,
+                            "expected": None,
+                            "processed": 0,
+                            "out_dir": out_dir,
+                            "session_name": session_name,
+                            "stem_name": stem_name,
+                            "is_seamless": item["is_seamless"],
+                        }
+                    batch_buf.append(item)
+                    if len(batch_buf) >= args.batch_size:
+                        _flush_batch(
+                            batch_buf, stem_states,
+                            marlin_model, temporal_pool,
+                            wav2vec2_ctc, wav2vec2_proc, cfg,
                         )
-                    elif is_seamless:
-                        fau_rows.append(np.zeros(24, dtype=np.float32))
-                    elif avf_entries:
-                        record.update(chunk_candor_emotion(avf_entries, start_sec, end_sec))
-
-                    jsonl_fh.write(json.dumps(record) + "\n")
-                    pair_chunks += 1
-                    total_chunks += 1
-
-                except Exception as e:
-                    logger.warning("Chunk %d error in %s: %s", chunk_id, stem_name, e)
-
-        if pair_chunks == 0:
-            logger.warning("No chunks from %s/%s — skipping save", session_name, stem_name)
-            continue
-
-        np.save(str(out_dir / "v_raw.npy"),      np.stack(v_rows))
-        np.save(str(out_dir / "ph_raw.npy"),     np.stack(ph_rows))
-        np.save(str(out_dir / "ph_labels.npy"),  np.stack(ph_label_rows))
-        np.save(str(out_dir / "ph_mask.npy"),    np.stack(ph_mask_rows))
-        np.save(str(out_dir / "p_raw.npy"),      np.stack(p_rows))
-
-        if is_seamless and fau_rows:
-            np.save(str(out_dir / "fau.npy"), np.stack(fau_rows))
-
-        logger.info("  → %d chunks saved to %s", pair_chunks, out_dir)
-        sessions_processed.append(f"{session_name}/{stem_name}")
+                        total_chunks += _try_save_complete(stem_states, sessions_processed)
 
     if skipped_existing:
         logger.info("Skipped %d already-processed stem(s)", skipped_existing)

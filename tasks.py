@@ -109,11 +109,11 @@ def run_ablations_task(c, feature_dir="datasets/pregenerated", device="cpu", dry
 
 
 @task(name="generate-wrangled-tokens")
-def generate_wrangled_tokens_task(c, device="cpu", max_pairs=None):
+def generate_wrangled_tokens_task(c, device="cpu", max_pairs=None, batch_size=32, num_workers=6):
     """Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/."""
     cmd = (
         f"python scripts/generate_wrangled_tokens.py "
-        f"--device {device}"
+        f"--device {device} --batch-size {batch_size} --num-workers {num_workers}"
     )
     if max_pairs:
         cmd += f" --max-pairs {max_pairs}"
