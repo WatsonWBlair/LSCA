@@ -42,11 +42,11 @@ def _get_z_dict(z_v, z_ph_pooled, z_p, cfg: CAMELSConfig) -> dict[str, torch.Ten
 def _forward_batch(batch, adapters, cfg, device, stage):
     """Run forward pass for one batch. Returns all needed tensors."""
     v_raw, ph_raw, ph_labels, ph_mask, p_raw = batch
-    v_raw = v_raw.to(device)
-    ph_raw = ph_raw.to(device)
-    ph_labels = ph_labels.to(device)
-    ph_mask = ph_mask.to(device)
-    p_raw = p_raw.to(device)
+    v_raw     = v_raw.to(device,     non_blocking=True)
+    ph_raw    = ph_raw.to(device,    non_blocking=True)
+    ph_labels = ph_labels.to(device, non_blocking=True)
+    ph_mask   = ph_mask.to(device,   non_blocking=True)
+    p_raw     = p_raw.to(device,     non_blocking=True)
 
     result = {"v_raw": v_raw, "ph_raw": ph_raw, "ph_labels": ph_labels, "ph_mask": ph_mask, "p_raw": p_raw}
 

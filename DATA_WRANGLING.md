@@ -167,11 +167,11 @@ Each 2-second chunk (1-second stride) produces the following rows:
 | File | Shape per chunk | Dtype | Size per chunk |
 |------|----------------|-------|----------------|
 | `v_raw.npy` | (768,) | float32 | 3 KB |
-| `ph_raw.npy` | (50, 768) | float32 | **150 KB** ← dominates |
+| `ph_raw.npy` | (50, 1024) | float32 | **200 KB** ← dominates |
 | `ph_labels.npy` | (50,) | int64 | ~0.4 KB |
-| `ph_mask.npy` | (50,) | int64 | ~0.4 KB |
+| `ph_mask.npy` | (50,) | float32 | ~0.2 KB |
 | `p_raw.npy` | (22,) | float32 | <1 KB |
-| **Total** | | | **~154 KB/chunk** |
+| **Total** | | | **~204 KB/chunk** |
 
 Chunk rate: **~3,600 chunks per hour** of footage.
 
@@ -184,6 +184,43 @@ Chunk rate: **~3,600 chunks per hour** of footage.
 
 > `ph_raw` accounts for ~97% of token storage. If memory is constrained, consider processing
 > in per-session batches rather than generating all tokens upfront.
+
+### Token Consolidation
+
+Before training, consolidate per-stem token files into a single flat set of memory-mappable files:
+
+```bash
+invoke consolidate-pregenerated
+```
+
+This runs `scripts/consolidate_pregenerated.py`, which streams all per-stem `.npy` files under `datasets/pregenerated/{backbone_tag}/` into five flat numpy memmaps under `datasets/consolidated/{backbone_tag}/` and writes a `manifest.jsonl` index.
+
+**Why this step is needed:** The pregeneration script produces one directory per participant-video stem (~919 stems for the current dataset). Loading 919 separate files at training init is slow and `np.load()` without mmap would attempt to hold the full dataset in RAM. The consolidated files are pre-allocated on disk; the OS pages in only the slices accessed per batch, so training RAM stays near zero regardless of dataset size.
+
+**Backbone-tag scoping:** Consolidation is scoped to a single backbone tag. Each encoder combination gets its own consolidated output, preserving the ability to swap or compare frozen encoders without re-running inference:
+
+```
+datasets/consolidated/
+  marlin-vit-base-ytf__wav2vec2-lv-60-espea/   ← current
+    v_raw.npy, ph_raw.npy, ph_labels.npy, ph_mask.npy, p_raw.npy, manifest.jsonl
+  marlin-vit-large__wav2vec2-lv-60-espea/       ← future video backbone swap
+    ...
+```
+
+Peak RAM during consolidation: one stem at a time (~350 MB). Re-run after adding new sessions.
+
+**Output files:**
+
+| File | Shape | Dtype |
+|------|-------|-------|
+| `v_raw.npy` | (N, 768) | float32 |
+| `ph_raw.npy` | (N, 50, 1024) | float32 |
+| `ph_labels.npy` | (N, 50) | int64 |
+| `ph_mask.npy` | (N, 50) | float32 |
+| `p_raw.npy` | (N, 22) | float32 |
+| `manifest.jsonl` | one entry per stem | — |
+
+Point `--feature-dir` at the consolidated directory when running `scripts/train_adapters.py`.
 
 ### Utility Commands
 

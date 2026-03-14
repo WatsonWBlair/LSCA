@@ -54,6 +54,8 @@ def parse_args():
     p.add_argument("--c-max-video",    default=10.0,  type=float)
     p.add_argument("--c-max-prosody",  default=5.0,   type=float)
     p.add_argument("--c-max-phoneme",  default=5.0,   type=float)
+    p.add_argument("--num-workers",    default=4,     type=int,
+                   help="DataLoader worker processes (default: 4)")
     return p.parse_args()
 
 
@@ -109,6 +111,7 @@ def main():
         feature_dir=args.feature_dir,
         cfg=cfg,
         batch_size=cfg.training.batch_size,
+        num_workers=args.num_workers,
     )
 
     history = train_all_stages(

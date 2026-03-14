@@ -31,6 +31,7 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 | `invoke wrangle-candor` | Download, extract, and wrangle CANDOR parts into datasets/wrangled/ |
 | `invoke wrangle-candor-to-wrangled` | Backfill already-downloaded CANDOR parts into datasets/wrangled/ |
 | `invoke generate-wrangled-tokens` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
+| `invoke consolidate-pregenerated` | Consolidate per-stem .npy files into flat mmap files for training (run once per backbone tag) |
 | `invoke run-ablations` | Run ablation sweep over d_latent, modality combos, MoCo, and phoneme adapter type |
 
 Run tests: `pytest tests/ -v` or `pytest tests/test_config.py::test_default_config`
@@ -75,7 +76,7 @@ encoding/
 │   └── dispatch.py         # run_all_pipelines(), handle_silent_chunk()
 └── training/
     ├── losses.py           # InfoNCE, AVAE-cap, L_orth, L_var, L_cov, FM, phoneme probe
-    ├── dataset.py          # MultimodalDataset (3 modalities)
+    ├── dataset.py          # MultimodalDataset (mmap, 3 modalities), PregenDataset, DyadicPairDataset
     ├── evaluate.py         # 3-modality evaluation suite
     └── train.py            # 3-stage training loop (A → B → C)
 ```
@@ -106,7 +107,8 @@ MoCo (Momentum Contrast) is the default contrastive loss; falls back to InfoNCE 
 | File | Purpose |
 |------|---------|
 | `scripts/generate_wrangled_tokens.py` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
-| `scripts/train_adapters.py` | Run 3-stage training protocol (supports `--modalities`, `--phoneme-adapter-type`, `--no-moco`, loss weight flags) |
+| `scripts/consolidate_pregenerated.py` | Streaming consolidation of per-stem .npy files into flat mmap files under datasets/consolidated/ |
+| `scripts/train_adapters.py` | Run 3-stage training protocol (supports `--modalities`, `--phoneme-adapter-type`, `--no-moco`, `--num-workers`, loss weight flags) |
 | `scripts/run_ablations.py` | Ablation harness — sweeps d_latent, modality combos, MoCo on/off, phoneme adapter type; use `--dry-run` to preview |
 | `scripts/preprocess_data.py` | **Deprecated** — extract raw features directly from .mp4/.wav (use `invoke generate-wrangled-tokens` instead) |
 

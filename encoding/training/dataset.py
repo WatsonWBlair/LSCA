@@ -27,9 +27,9 @@ PRAW_FILE = "p_raw.npy"
 
 class MultimodalDataset(Dataset):
     """
-    Loads pre-extracted raw features for 3 modalities.
+    Loads pre-extracted raw features for 3 modalities via memory-mapped numpy files.
 
-    Expected files in feature_dir:
+    Expected files in feature_dir (produced by scripts/consolidate_pregenerated.py):
       v_raw.npy      — (N, d_video)
       ph_raw.npy     — (N, MAX_PHONES, d_phoneme)
       ph_labels.npy  — (N, MAX_PHONES)
@@ -37,6 +37,10 @@ class MultimodalDataset(Dataset):
       p_raw.npy      — (N, d_prosody)
 
     Row N in all files corresponds to the same chunk.
+
+    Files are opened with mmap_mode='r' — the OS pages in only the slices
+    accessed by each __getitem__ call. RAM at construction is near zero;
+    only batch-sized windows are resident during training.
     """
 
     def __init__(self, feature_dir: str, cfg: CAMELSConfig):
@@ -56,44 +60,48 @@ class MultimodalDataset(Dataset):
             if not os.path.exists(path):
                 raise FileNotFoundError(
                     f"Feature file not found: {path}\n"
-                    "Run scripts/preprocess_data.py first."
+                    "Run: invoke consolidate-pregenerated"
                 )
 
-        self.v_raw = torch.from_numpy(np.load(paths["v_raw"]).astype(np.float32))
-        self.ph_raw = torch.from_numpy(np.load(paths["ph_raw"]).astype(np.float32))
-        self.ph_labels = torch.from_numpy(np.load(paths["ph_labels"]).astype(np.int64))
-        self.ph_mask = torch.from_numpy(np.load(paths["ph_mask"]).astype(np.float32)).bool()
-        self.p_raw = torch.from_numpy(np.load(paths["p_raw"]).astype(np.float32))
+        # mmap_mode='r': files stay on disk; OS pages in slices on demand.
+        self._v_raw     = np.load(paths["v_raw"],     mmap_mode="r")
+        self._ph_raw    = np.load(paths["ph_raw"],    mmap_mode="r")
+        self._ph_labels = np.load(paths["ph_labels"], mmap_mode="r")
+        self._ph_mask   = np.load(paths["ph_mask"],   mmap_mode="r")
+        self._p_raw     = np.load(paths["p_raw"],     mmap_mode="r")
 
-        n = self.v_raw.shape[0]
-        assert self.ph_raw.shape[0] == n, f"Row count mismatch: ph_raw ({self.ph_raw.shape[0]} vs {n})"
-        assert self.ph_labels.shape[0] == n, f"Row count mismatch: ph_labels"
-        assert self.ph_mask.shape[0] == n, f"Row count mismatch: ph_mask"
-        assert self.p_raw.shape[0] == n, f"Row count mismatch: p_raw ({self.p_raw.shape[0]} vs {n})"
+        n = self._v_raw.shape[0]
+        assert self._ph_raw.shape[0] == n,    f"Row count mismatch: ph_raw ({self._ph_raw.shape[0]} vs {n})"
+        assert self._ph_labels.shape[0] == n, "Row count mismatch: ph_labels"
+        assert self._ph_mask.shape[0] == n,   "Row count mismatch: ph_mask"
+        assert self._p_raw.shape[0] == n,     f"Row count mismatch: p_raw ({self._p_raw.shape[0]} vs {n})"
 
         # Validate dimensions against config
-        assert self.v_raw.shape[1] == self.cfg.latent.d_video, (
-            f"v_raw dim {self.v_raw.shape[1]} != d_video {self.cfg.latent.d_video}"
+        assert self._v_raw.shape[1] == self.cfg.latent.d_video, (
+            f"v_raw dim {self._v_raw.shape[1]} != d_video {self.cfg.latent.d_video}"
         )
-        assert self.ph_raw.shape[2] == self.cfg.latent.d_phoneme, (
-            f"ph_raw dim {self.ph_raw.shape[2]} != d_phoneme {self.cfg.latent.d_phoneme}"
+        assert self._ph_raw.shape[2] == self.cfg.latent.d_phoneme, (
+            f"ph_raw dim {self._ph_raw.shape[2]} != d_phoneme {self.cfg.latent.d_phoneme}"
         )
-        assert self.p_raw.shape[1] == self.cfg.latent.d_prosody, (
-            f"p_raw dim {self.p_raw.shape[1]} != d_prosody {self.cfg.latent.d_prosody}"
+        assert self._p_raw.shape[1] == self.cfg.latent.d_prosody, (
+            f"p_raw dim {self._p_raw.shape[1]} != d_prosody {self.cfg.latent.d_prosody}"
         )
 
-        logger.info("MultimodalDataset: %d chunks from %s", n, self.feature_dir)
+        logger.info("MultimodalDataset: %d chunks from %s (mmap)", n, self.feature_dir)
 
     def __len__(self) -> int:
-        return self.v_raw.shape[0]
+        return self._v_raw.shape[0]
 
     def __getitem__(self, idx: int):
+        # .copy() is required: mmap slices are views without owned memory.
+        # DataLoader multiprocessing workers must own the data they transfer.
+        # astype(copy=False) avoids a double copy when dtype already matches.
         return (
-            self.v_raw[idx],       # (d_video,)
-            self.ph_raw[idx],      # (MAX_PHONES, d_phoneme)
-            self.ph_labels[idx],   # (MAX_PHONES,)
-            self.ph_mask[idx],     # (MAX_PHONES,)
-            self.p_raw[idx],       # (d_prosody,)
+            torch.from_numpy(self._v_raw[idx].astype(np.float32, copy=False).copy()),
+            torch.from_numpy(self._ph_raw[idx].astype(np.float32, copy=False).copy()),
+            torch.from_numpy(self._ph_labels[idx].copy()),
+            torch.from_numpy(self._ph_mask[idx].astype(np.float32, copy=False).copy()).bool(),
+            torch.from_numpy(self._p_raw[idx].astype(np.float32, copy=False).copy()),
         )
 
 
@@ -254,13 +262,17 @@ def make_dataloaders(
     cfg: CAMELSConfig,
     val_fraction: float = 0.1,
     test_fraction: float = 0.1,
-    num_workers: int = 0,
+    num_workers: int = 4,
     seed: int = 42,
     batch_size: int | None = None,
+    pin_memory: bool = True,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Split into train/val/test DataLoaders.
 
     batch_size overrides cfg.training.batch_size when provided.
+    pin_memory=True (default) enables async PCIe DMA when combined with
+    non_blocking=True device transfers in the training loop.
+    persistent_workers=True avoids per-epoch fork overhead when num_workers > 0.
     """
     dataset = MultimodalDataset(feature_dir, cfg)
     n = len(dataset)
@@ -272,9 +284,23 @@ def make_dataloaders(
     train_ds, val_ds, test_ds = random_split(dataset, [n_train, n_val, n_test], generator=generator)
 
     bs = batch_size if batch_size is not None else cfg.training.batch_size
-    train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=num_workers, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=num_workers)
-    test_loader = DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=num_workers)
+    pw = num_workers > 0
+    train_loader = DataLoader(
+        train_ds, batch_size=bs, shuffle=True,
+        num_workers=num_workers, drop_last=True,
+        pin_memory=pin_memory, persistent_workers=pw,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=bs, shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory, persistent_workers=pw,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=bs, shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory, persistent_workers=pw,
+    )
 
-    logger.info("DataLoaders: train=%d, val=%d, test=%d (batch=%d)", len(train_ds), len(val_ds), len(test_ds), bs)
+    logger.info("DataLoaders: train=%d, val=%d, test=%d (batch=%d, workers=%d)",
+                len(train_ds), len(val_ds), len(test_ds), bs, num_workers)
     return train_loader, val_loader, test_loader

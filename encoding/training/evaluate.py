@@ -123,8 +123,8 @@ def eval_reconstruction_mse(
     """Decode z back to input domain. Video < 0.10, prosody < 0.05."""
     mse = {"video": [], "prosody": []}
     for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
-        v_raw = v_raw.to(device)
-        p_raw = p_raw.to(device)
+        v_raw = v_raw.to(device, non_blocking=True)
+        p_raw = p_raw.to(device, non_blocking=True)
         with torch.no_grad():
             if "video_adapter" in adapters:
                 mu_v, lv_v = adapters["video_adapter"].encode(v_raw)
@@ -152,8 +152,8 @@ def eval_kl_per_modality(
     """Monitor KL divergence per AVAE modality."""
     kl = {"video": [], "prosody": []}
     for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
-        v_raw = v_raw.to(device)
-        p_raw = p_raw.to(device)
+        v_raw = v_raw.to(device, non_blocking=True)
+        p_raw = p_raw.to(device, non_blocking=True)
         with torch.no_grad():
             for raw, key, name in [(v_raw, "video_adapter", "video"), (p_raw, "prosody_adapter", "prosody")]:
                 if key in adapters:
@@ -245,9 +245,9 @@ def eval_phoneme_probe_accuracy(
     correct = 0
     total = 0
     for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
-        ph_raw = ph_raw.to(device)
-        ph_labels = ph_labels.to(device)
-        ph_mask = ph_mask.to(device)
+        ph_raw = ph_raw.to(device, non_blocking=True)
+        ph_labels = ph_labels.to(device, non_blocking=True)
+        ph_mask = ph_mask.to(device, non_blocking=True)
         with torch.no_grad():
             z_ph = adapters["phoneme_adapter"](ph_raw)
             logits = adapters["phoneme_probe"](z_ph)
@@ -270,10 +270,10 @@ def run_evaluation(
     all_v, all_ph_pooled, all_p = [], [], []
 
     for v_raw, ph_raw, ph_labels, ph_mask, p_raw in val_loader:
-        v_raw = v_raw.to(device)
-        ph_raw = ph_raw.to(device)
-        ph_mask = ph_mask.to(device)
-        p_raw = p_raw.to(device)
+        v_raw = v_raw.to(device, non_blocking=True)
+        ph_raw = ph_raw.to(device, non_blocking=True)
+        ph_mask = ph_mask.to(device, non_blocking=True)
+        p_raw = p_raw.to(device, non_blocking=True)
 
         with torch.no_grad():
             z_v = adapters["video_adapter"].embed(v_raw)
