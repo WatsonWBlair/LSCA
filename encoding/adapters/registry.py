@@ -32,16 +32,21 @@ def build_adapters(cfg: CAMELSConfig) -> dict:
         )
 
     if cfg.modality.phoneme_enabled:
-        adapters["phoneme_adapter"] = PhonemeAdapter(
-            d_in=lat.d_phoneme, d_latent=lat.d_latent,
-        )
-        adapters["phoneme_attn_pool"] = PhonemeAttnPool(d=lat.d_latent)
-        if lat.num_phoneme_classes > 0:
-            adapters["phoneme_probe"] = PhonemeProbeHead(
-                d=lat.d_latent,
-                n_classes=lat.num_phoneme_classes,
-                hidden=adp.hidden_probe,
+        if cfg.modality.phoneme_adapter_type == "avae":
+            adapters["phoneme_adapter"] = AVAEAdapter(
+                d_in=lat.d_phoneme, d_latent=lat.d_latent, hidden=adp.hidden_high,
             )
+        else:
+            adapters["phoneme_adapter"] = PhonemeAdapter(
+                d_in=lat.d_phoneme, d_latent=lat.d_latent,
+            )
+            adapters["phoneme_attn_pool"] = PhonemeAttnPool(d=lat.d_latent)
+            if lat.num_phoneme_classes > 0:
+                adapters["phoneme_probe"] = PhonemeProbeHead(
+                    d=lat.d_latent,
+                    n_classes=lat.num_phoneme_classes,
+                    hidden=adp.hidden_probe,
+                )
 
     if cfg.modality.prosody_enabled:
         adapters["prosody_adapter"] = AVAEAdapter(

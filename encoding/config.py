@@ -63,6 +63,7 @@ class TrainingConfig:
     # Capacity-controlled KL
     c_max_video: float = 25.0
     c_max_prosody: float = 10.0
+    c_max_phoneme: float = 10.0
     beta_cap: float = 1.0
     # Stage epochs
     stage_a_epochs: int = 20

@@ -57,10 +57,26 @@ def _forward_batch(batch, adapters, cfg, device, stage):
         mu_v, lv_v, z_v, xh_v, zp_v = adapters["video_adapter"](v_raw)
         result.update({"mu_v": mu_v, "lv_v": lv_v, "z_v": z_v, "xh_v": xh_v, "zp_v": zp_v})
 
-    # Phoneme (always linear forward)
-    z_ph_seq = adapters["phoneme_adapter"](ph_raw)          # (B, MAX, d_latent)
-    z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)  # (B, d_latent)
-    result.update({"z_ph_seq": z_ph_seq, "z_ph_pooled": z_ph_pooled})
+    # Phoneme — branch on adapter type
+    if cfg.modality.phoneme_enabled:
+        if cfg.modality.phoneme_adapter_type == "avae":
+            # Mean-pool raw features over unmasked positions → (B, d_phoneme)
+            mask_f = ph_mask.float().unsqueeze(-1)  # (B, MAX, 1)
+            ph_pooled = (ph_raw * mask_f).sum(1) / mask_f.sum(1).clamp(min=1)
+            if stage == "A":
+                z_ph_pooled = adapters["phoneme_adapter"].embed(ph_pooled)
+                result.update({"z_ph_pooled": z_ph_pooled})
+            else:
+                mu_ph, lv_ph, z_ph_pooled, xh_ph, zp_ph = adapters["phoneme_adapter"](ph_pooled)
+                result.update({
+                    "ph_pooled": ph_pooled,
+                    "mu_ph": mu_ph, "lv_ph": lv_ph,
+                    "z_ph_pooled": z_ph_pooled, "xh_ph": xh_ph, "zp_ph": zp_ph,
+                })
+        else:
+            z_ph_seq = adapters["phoneme_adapter"](ph_raw)          # (B, MAX, d_latent)
+            z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)  # (B, d_latent)
+            result.update({"z_ph_seq": z_ph_seq, "z_ph_pooled": z_ph_pooled})
 
     # Prosody
     if stage == "A":
@@ -124,6 +140,18 @@ def _compute_losses(
             losses[f"avae_prosody_{k}"] = v
 
         l_avae = v_avae["total"] + p_avae["total"]
+
+        # Phoneme AVAE (only when adapter type is avae)
+        if cfg.modality.phoneme_enabled and cfg.modality.phoneme_adapter_type == "avae":
+            C_ph = get_capacity(epoch, stage_b_start, stage_b_end, tc.c_max_phoneme)
+            ph_avae = avae_loss(
+                fwd["ph_pooled"], fwd["xh_ph"], fwd["mu_ph"], fwd["lv_ph"],
+                fwd["z_ph_pooled"], fwd["zp_ph"], C_ph, tc.beta_cap,
+            )
+            for k, v in ph_avae.items():
+                losses[f"avae_phoneme_{k}"] = v
+            l_avae = l_avae + ph_avae["total"]
+
         losses["avae_total"] = l_avae
 
         # L_orth

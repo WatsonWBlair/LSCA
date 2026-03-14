@@ -21,6 +21,10 @@ velocity.py      → VelocityNet (OT flow matching transport)
 registry.py      → build_adapters(cfg), save_adapters(), load_adapters()
 ```
 
+`build_adapters()` branches on `ModalityConfig.phoneme_adapter_type`:
+- `"linear"` (default) — `PhonemeAdapter` + `PhonemeAttnPool` + optional `PhonemeProbeHead`
+- `"avae"` — `AVAEAdapter` (mean-pooled input); no attn-pool or probe; AVAE loss active in Stage B/C
+
 ### models/
 
 Frozen pretrained encoders (never trained, weights not updated).
