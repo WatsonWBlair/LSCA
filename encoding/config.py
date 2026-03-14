@@ -54,16 +54,16 @@ class TrainingConfig:
     temperature: float = 0.07
     sigma_min: float = 1e-4
     # Geometric loss weights
-    lambda_orth: float = 0.01
+    lambda_orth: float = 0.05
     lambda_var: float = 0.04
     lambda_cov: float = 0.04
     gamma_var: float = 1.0
     # Phoneme probe weight
     lambda_aux: float = 0.1
     # Capacity-controlled KL
-    c_max_video: float = 25.0
-    c_max_prosody: float = 10.0
-    c_max_phoneme: float = 10.0
+    c_max_video: float = 10.0
+    c_max_prosody: float = 5.0
+    c_max_phoneme: float = 5.0
     beta_cap: float = 1.0
     # Stage epochs
     stage_a_epochs: int = 20
