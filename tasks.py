@@ -93,6 +93,21 @@ def wrangle_candor_to_wrangled_task(c):
     print(f"Wrangled {total} user(s) total")
 
 
+@task(name="run-ablations")
+def run_ablations_task(c, feature_dir="datasets/pregenerated", device="cpu", dry_run=False, variants=None):
+    """Run ablation sweep over d_latent, modality combos, MoCo, and phoneme adapter type."""
+    cmd = (
+        f"python scripts/run_ablations.py "
+        f"--feature-dir {feature_dir} "
+        f"--device {device}"
+    )
+    if dry_run:
+        cmd += " --dry-run"
+    if variants:
+        cmd += f" --variants {variants}"
+    c.run(cmd)
+
+
 @task(name="generate-wrangled-tokens")
 def generate_wrangled_tokens_task(c, device="cpu", max_pairs=None):
     """Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/."""

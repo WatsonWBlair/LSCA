@@ -31,6 +31,7 @@ All task automation uses [Invoke](https://www.pyinvoke.org/):
 | `invoke wrangle-candor` | Download, extract, and wrangle CANDOR parts into datasets/wrangled/ |
 | `invoke wrangle-candor-to-wrangled` | Backfill already-downloaded CANDOR parts into datasets/wrangled/ |
 | `invoke generate-wrangled-tokens` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
+| `invoke run-ablations` | Run ablation sweep over d_latent, modality combos, MoCo, and phoneme adapter type |
 
 Run tests: `pytest tests/ -v` or `pytest tests/test_config.py::test_default_config`
 
@@ -84,8 +85,10 @@ encoding/
 | Modality | Frozen Encoder | Output | Adapter |
 |----------|---------------|--------|---------|
 | Video    | MARLIN ViT-Base | (768,) | AVAEAdapter |
-| Phoneme  | wav2vec2-lv-60-espeak-cv-ft (CTC) | (MAX_PHONES, 768) | PhonemeAdapter (linear) + PhonemeAttnPool |
+| Phoneme  | wav2vec2-lv-60-espeak-cv-ft (CTC) | (MAX_PHONES, 1024) | PhonemeAdapter (linear) + PhonemeAttnPool **or** AVAEAdapter (configurable) |
 | Prosody  | librosa 22-dim features | (22,) | AVAEAdapter |
+
+`ModalityConfig.phoneme_adapter_type` selects between `"linear"` (default: sequence → linear proj → AttnPool) and `"avae"` (mean-pool raw features → AVAE, enables capacity-controlled KL in Stage B/C).
 
 Shared latent dimension: **768** (configurable via `CAMELSConfig.latent.d_latent`).
 Text/transcript is handled by EmformerASR as a utility (NOT a latent modality).
@@ -103,7 +106,8 @@ MoCo (Momentum Contrast) is the default contrastive loss; falls back to InfoNCE 
 | File | Purpose |
 |------|---------|
 | `scripts/generate_wrangled_tokens.py` | Pregenerate backbone tokens from datasets/wrangled/ into datasets/pregenerated/ |
-| `scripts/train_adapters.py` | Run 3-stage training protocol |
+| `scripts/train_adapters.py` | Run 3-stage training protocol (supports `--modalities`, `--phoneme-adapter-type`, `--no-moco`, loss weight flags) |
+| `scripts/run_ablations.py` | Ablation harness — sweeps d_latent, modality combos, MoCo on/off, phoneme adapter type; use `--dry-run` to preview |
 | `scripts/preprocess_data.py` | **Deprecated** — extract raw features directly from .mp4/.wav (use `invoke generate-wrangled-tokens` instead) |
 
 Live streaming is handled via `encoding/streaming/` (see `encoding/streaming/dispatch.py`).
@@ -131,5 +135,6 @@ The following research directions are described in design docs but have no imple
 - Row N in every .npy == chunk N in chunks.jsonl — never violate
 - Silent chunks → append zero rows, never skip chunk_id
 - FM loss: adapters **detached** — only VelocityNets receive gradients
-- PhonemeAdapter is **linear** (not AVAE) — verification uses PhonemeProbeHead instead
+- `phoneme_adapter_type="linear"` (default): sequence path with `PhonemeAttnPool` + optional `PhonemeProbeHead`; `"avae"`: mean-pool → `AVAEAdapter`, no probe, AVAE loss active in Stage B/C via `c_max_phoneme`
+- Ablation variants are isolated under `checkpoints/ablations/{name}/`; single-modality runs are expected to fail `validate()` and are recorded as errors without crashing the harness
 
