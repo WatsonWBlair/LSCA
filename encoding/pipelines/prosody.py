@@ -45,8 +45,11 @@ def extract_prosody_raw(
 
     wav = chunk_waveform.astype(np.float64)
 
-    # Pitch (pyin)
-    f0, voiced_flag, _ = librosa.pyin(wav, fmin=50, fmax=400, sr=sr)
+    # Pitch (yin — ~10-15x faster than pyin; no voiced_flag output)
+    f0 = librosa.yin(wav, fmin=50, fmax=400, sr=sr)
+    voiced = (f0 > 50) & (f0 < 400) & np.isfinite(f0)
+    f0 = f0.astype(float)
+    f0[~voiced] = np.nan
     pitch_mean = float(np.nanmean(f0)) if f0 is not None and len(f0) > 0 else 0.0
     pitch_std = float(np.nanstd(f0)) if f0 is not None and len(f0) > 0 else 0.0
     speak_rate = float(np.sum(~np.isnan(f0)) / len(f0)) if f0 is not None and len(f0) > 0 else 0.0
