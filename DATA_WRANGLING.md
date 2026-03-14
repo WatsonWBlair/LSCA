@@ -139,6 +139,16 @@ datasets/wrangled/
 
 Storage: ~170MB per conversation.
 
+### Known Data Quality Issues
+
+**Transcript words with `None` timestamps (Seamless + CANDOR)**
+
+102 of 868 wrangled files contain words where the ASR aligner could not assign a timestamp — typically isolated numbers, prices, or punctuation tokens (e.g. `'2025.'`, `'$20.'`, `'8'`). These words have `"start": null, "end": null` in `metadata:transcript[].words`.
+
+This is not corruption — the transcript model detected the token but forced-alignment failed for it. The affected words are skipped silently during token pre-generation (`chunk_labels` guards against `None` before comparing timestamps). No action needed; the omitted words have no material impact on training data quality.
+
+---
+
 ### Token Pre-generation
 
 After wrangling, pregenerate backbone tokens for efficient training:

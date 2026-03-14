@@ -274,10 +274,11 @@ def chunk_labels(
     vad_coverage = min(1.0, vad_overlap / window_sec) if window_sec > 0 else 0.0
     vad_active = vad_coverage > 0.0
 
-    # Words overlapping this chunk
+    # Words overlapping this chunk (guard against None timestamps — see DATA_WRANGLING.md)
     overlapping_words = [
         w for w in word_list
-        if w["start"] < end_sec and w["end"] > start_sec
+        if w.get("start") is not None and w.get("end") is not None
+        and w["start"] < end_sec and w["end"] > start_sec
     ]
     transcript = " ".join(w["word"] for w in overlapping_words)
     asr_confidence = (
