@@ -101,11 +101,16 @@ class MomentumEncoderManager:
             z_k_dict["video"] = self.key_adapters["video_adapter"].embed(v_raw)
 
         if cfg.modality.phoneme_enabled and "phoneme_adapter" in self.key_adapters:
-            z_ph_seq = self.key_adapters["phoneme_adapter"](ph_raw)
-            if "phoneme_attn_pool" in self.key_adapters:
-                z_k_dict["phoneme"] = self.key_adapters["phoneme_attn_pool"](
-                    z_ph_seq, ph_mask
-                )
+            if cfg.modality.phoneme_adapter_type == "avae":
+                mask_f = ph_mask.float().unsqueeze(-1)
+                ph_pooled = (ph_raw * mask_f).sum(1) / mask_f.sum(1).clamp(min=1)
+                z_k_dict["phoneme"] = self.key_adapters["phoneme_adapter"].embed(ph_pooled)
+            else:
+                z_ph_seq = self.key_adapters["phoneme_adapter"](ph_raw)
+                if "phoneme_attn_pool" in self.key_adapters:
+                    z_k_dict["phoneme"] = self.key_adapters["phoneme_attn_pool"](
+                        z_ph_seq, ph_mask
+                    )
 
         if cfg.modality.prosody_enabled and "prosody_adapter" in self.key_adapters:
             z_k_dict["prosody"] = self.key_adapters["prosody_adapter"].embed(p_raw)

@@ -256,8 +256,12 @@ def make_dataloaders(
     test_fraction: float = 0.1,
     num_workers: int = 0,
     seed: int = 42,
+    batch_size: int | None = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    """Split into train/val/test DataLoaders."""
+    """Split into train/val/test DataLoaders.
+
+    batch_size overrides cfg.training.batch_size when provided.
+    """
     dataset = MultimodalDataset(feature_dir, cfg)
     n = len(dataset)
     n_test = max(1, int(n * test_fraction))
@@ -267,7 +271,7 @@ def make_dataloaders(
     generator = torch.Generator().manual_seed(seed)
     train_ds, val_ds, test_ds = random_split(dataset, [n_train, n_val, n_test], generator=generator)
 
-    bs = cfg.training.batch_size
+    bs = batch_size if batch_size is not None else cfg.training.batch_size
     train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=num_workers)
     test_loader = DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=num_workers)

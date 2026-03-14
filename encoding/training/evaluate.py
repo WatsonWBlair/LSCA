@@ -277,8 +277,13 @@ def run_evaluation(
 
         with torch.no_grad():
             z_v = adapters["video_adapter"].embed(v_raw)
-            z_ph_seq = adapters["phoneme_adapter"](ph_raw)
-            z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)
+            if cfg.modality.phoneme_adapter_type == "avae":
+                mask_f = ph_mask.float().unsqueeze(-1)
+                ph_pooled = (ph_raw * mask_f).sum(1) / mask_f.sum(1).clamp(min=1)
+                z_ph_pooled = adapters["phoneme_adapter"].embed(ph_pooled)
+            else:
+                z_ph_seq = adapters["phoneme_adapter"](ph_raw)
+                z_ph_pooled = adapters["phoneme_attn_pool"](z_ph_seq, ph_mask)
             z_p = adapters["prosody_adapter"].embed(p_raw)
 
         all_v.append(z_v.cpu())

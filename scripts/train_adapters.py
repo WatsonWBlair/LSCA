@@ -49,11 +49,11 @@ def parse_args():
     p.add_argument("--weight-decay",   default=1e-4,  type=float)
     p.add_argument("--lambda-var",     default=0.04,  type=float)
     p.add_argument("--lambda-cov",     default=0.04,  type=float)
-    p.add_argument("--lambda-orth",    default=0.01,  type=float)
+    p.add_argument("--lambda-orth",    default=0.05,  type=float)
     p.add_argument("--lambda-aux",     default=0.1,   type=float)
-    p.add_argument("--c-max-video",    default=25.0,  type=float)
-    p.add_argument("--c-max-prosody",  default=10.0,  type=float)
-    p.add_argument("--c-max-phoneme",  default=10.0,  type=float)
+    p.add_argument("--c-max-video",    default=10.0,  type=float)
+    p.add_argument("--c-max-prosody",  default=5.0,   type=float)
+    p.add_argument("--c-max-phoneme",  default=5.0,   type=float)
     return p.parse_args()
 
 
